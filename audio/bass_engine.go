@@ -3,6 +3,7 @@ package audio
 import (
 	"context"
 	"fmt"
+	"os"
 	"runtime"
 	"sync"
 
@@ -120,11 +121,11 @@ func (be *BassEngine) Init(device int, freq int) error {
 }
 
 // Load 加载音频文件到指定通道
-func (be *BassEngine) Load(channel string, filePath string, isEncrypt bool, volume float32) error {
+func (be *BassEngine) Load(channel int, filePath string, isEncrypt bool, volume float64) error {
 	result := be.execIO(func() interface{} {
-		ch := be.channels.Get(channel)
+		ch := be.channels.GetByIndex(channel)
 		if ch == nil {
-			return fmt.Errorf("未知通道: %s", channel)
+			return fmt.Errorf("未知通道索引: %d", channel)
 		}
 
 		// 释放旧流
@@ -154,15 +155,13 @@ func (be *BassEngine) Load(channel string, filePath string, isEncrypt bool, volu
 			return fmt.Errorf("加载文件失败: %s, %v", filePath, err)
 		}
 
-		// 设置音量
 		if volume >= 0 {
-			BassChannelSetAttribute(handle, AttribVol, volume)
+			BassChannelSetAttribute(handle, AttribVol, float32(volume))
 		}
 
-		// 设置播完回调
 		syncHandle, syncErr := BassChannelSetSyncEnd(handle, ch.Index)
 		if syncErr != nil {
-			log.Warn().Err(syncErr).Str("channel", channel).Msg("设置播完回调失败")
+			log.Warn().Err(syncErr).Int("channel", channel).Msg("设置播完回调失败")
 		}
 
 		ch.StreamHandle = handle
@@ -170,7 +169,7 @@ func (be *BassEngine) Load(channel string, filePath string, isEncrypt bool, volu
 		ch.FileUser = fileUser
 		ch.FilePath = filePath
 
-		log.Debug().Str("channel", channel).Str("path", filePath).Uint32("handle", handle).Msg("加载完成")
+		log.Debug().Int("channel", channel).Str("path", filePath).Uint32("handle", handle).Msg("加载完成")
 		return nil
 	})
 	if result == nil {
@@ -180,14 +179,14 @@ func (be *BassEngine) Load(channel string, filePath string, isEncrypt bool, volu
 }
 
 // Play 播放指定通道
-func (be *BassEngine) Play(channel string, restart bool) error {
+func (be *BassEngine) Play(channel int, restart bool) error {
 	result := be.execCtrl(func() interface{} {
-		ch := be.channels.Get(channel)
+		ch := be.channels.GetByIndex(channel)
 		if ch == nil {
-			return fmt.Errorf("未知通道: %s", channel)
+			return fmt.Errorf("未知通道索引: %d", channel)
 		}
 		if ch.StreamHandle == 0 {
-			return fmt.Errorf("通道 %s 未加载文件", channel)
+			return fmt.Errorf("通道 %d 未加载文件", channel)
 		}
 		return BassChannelPlay(ch.StreamHandle, restart)
 	})
@@ -198,11 +197,11 @@ func (be *BassEngine) Play(channel string, restart bool) error {
 }
 
 // Stop 停止指定通道
-func (be *BassEngine) Stop(channel string, fadeOut int) error {
+func (be *BassEngine) Stop(channel int, fadeOut int) error {
 	result := be.execCtrl(func() interface{} {
-		ch := be.channels.Get(channel)
+		ch := be.channels.GetByIndex(channel)
 		if ch == nil {
-			return fmt.Errorf("未知通道: %s", channel)
+			return fmt.Errorf("未知通道索引: %d", channel)
 		}
 		if ch.StreamHandle == 0 {
 			return nil // 未播放，不算错误
@@ -219,11 +218,11 @@ func (be *BassEngine) Stop(channel string, fadeOut int) error {
 }
 
 // Pause 暂停指定通道
-func (be *BassEngine) Pause(channel string) error {
+func (be *BassEngine) Pause(channel int) error {
 	result := be.execCtrl(func() interface{} {
-		ch := be.channels.Get(channel)
+		ch := be.channels.GetByIndex(channel)
 		if ch == nil {
-			return fmt.Errorf("未知通道: %s", channel)
+			return fmt.Errorf("未知通道索引: %d", channel)
 		}
 		if ch.StreamHandle == 0 {
 			return nil
@@ -237,11 +236,11 @@ func (be *BassEngine) Pause(channel string) error {
 }
 
 // Resume 恢复指定通道
-func (be *BassEngine) Resume(channel string) error {
+func (be *BassEngine) Resume(channel int) error {
 	result := be.execCtrl(func() interface{} {
-		ch := be.channels.Get(channel)
+		ch := be.channels.GetByIndex(channel)
 		if ch == nil {
-			return fmt.Errorf("未知通道: %s", channel)
+			return fmt.Errorf("未知通道索引: %d", channel)
 		}
 		if ch.StreamHandle == 0 {
 			return nil
@@ -255,16 +254,16 @@ func (be *BassEngine) Resume(channel string) error {
 }
 
 // SetVolume 设置通道音量
-func (be *BassEngine) SetVolume(channel string, volume float32) error {
+func (be *BassEngine) SetVolume(channel int, volume float64) error {
 	result := be.execCtrl(func() interface{} {
-		ch := be.channels.Get(channel)
+		ch := be.channels.GetByIndex(channel)
 		if ch == nil {
-			return fmt.Errorf("未知通道: %s", channel)
+			return fmt.Errorf("未知通道索引: %d", channel)
 		}
 		if ch.StreamHandle == 0 {
 			return nil
 		}
-		return BassChannelSetAttribute(ch.StreamHandle, AttribVol, volume)
+		return BassChannelSetAttribute(ch.StreamHandle, AttribVol, float32(volume))
 	})
 	if result == nil {
 		return nil
@@ -273,16 +272,16 @@ func (be *BassEngine) SetVolume(channel string, volume float32) error {
 }
 
 // GetPosition 获取通道播放位置（毫秒）和总时长（毫秒）
-func (be *BassEngine) GetPosition(channel string) (int64, int64, error) {
+func (be *BassEngine) GetPosition(channel int) (int, int, error) {
 	type posResult struct {
-		pos int64
-		dur int64
+		pos int
+		dur int
 		err error
 	}
 	result := be.execCtrl(func() interface{} {
-		ch := be.channels.Get(channel)
+		ch := be.channels.GetByIndex(channel)
 		if ch == nil {
-			return posResult{err: fmt.Errorf("未知通道: %s", channel)}
+			return posResult{err: fmt.Errorf("未知通道索引: %d", channel)}
 		}
 		if ch.StreamHandle == 0 {
 			return posResult{}
@@ -295,8 +294,8 @@ func (be *BassEngine) GetPosition(channel string) (int64, int64, error) {
 		durSec := BassChannelBytes2Seconds(ch.StreamHandle, lenBytes)
 
 		return posResult{
-			pos: int64(posSec * 1000),
-			dur: int64(durSec * 1000),
+			pos: int(posSec * 1000),
+			dur: int(durSec * 1000),
 		}
 	})
 	r := result.(posResult)
@@ -304,30 +303,30 @@ func (be *BassEngine) GetPosition(channel string) (int64, int64, error) {
 }
 
 // GetLevel 获取通道电平
-func (be *BassEngine) GetLevel(channel string) (float32, float32, error) {
+func (be *BassEngine) GetLevel(channel int) (float64, float64, error) {
 	type levelResult struct {
-		left, right float32
+		left, right float64
 		err         error
 	}
 	result := be.execCtrl(func() interface{} {
-		ch := be.channels.Get(channel)
+		ch := be.channels.GetByIndex(channel)
 		if ch == nil {
-			return levelResult{err: fmt.Errorf("未知通道: %s", channel)}
+			return levelResult{err: fmt.Errorf("未知通道索引: %d", channel)}
 		}
 		if ch.StreamHandle == 0 {
 			return levelResult{}
 		}
 		left, right := BassChannelGetLevel(ch.StreamHandle)
-		return levelResult{left: left, right: right}
+		return levelResult{left: float64(left), right: float64(right)}
 	})
 	r := result.(levelResult)
 	return r.left, r.right, r.err
 }
 
 // FreeChannel 释放指定通道资源
-func (be *BassEngine) FreeChannel(channel string) {
+func (be *BassEngine) FreeChannel(channel int) {
 	be.execIO(func() interface{} {
-		ch := be.channels.Get(channel)
+		ch := be.channels.GetByIndex(channel)
 		if ch == nil {
 			return nil
 		}
@@ -344,19 +343,98 @@ func (be *BassEngine) FreeAll() {
 	})
 }
 
-// Shutdown 关闭引擎
+// Shutdown 关闭引擎（通过 execIO 派发到 BASS 线程执行）
 func (be *BassEngine) Shutdown() {
-	be.mu.Lock()
-	defer be.mu.Unlock()
+	be.execIO(func() interface{} {
+		be.mu.Lock()
+		defer be.mu.Unlock()
 
-	if !be.inited {
-		return
+		if !be.inited {
+			return nil
+		}
+
+		be.freeAll()
+		BassFree()
+		be.inited = false
+		log.Info().Msg("BASS 引擎已关闭")
+		return nil
+	})
+}
+
+// SetEQ 设置通道均衡器
+func (be *BassEngine) SetEQ(channel int, bands []EQBandParam) error {
+	result := be.execIO(func() interface{} {
+		ch := be.channels.GetByIndex(channel)
+		if ch == nil {
+			return fmt.Errorf("未知通道索引: %d", channel)
+		}
+		if ch.StreamHandle == 0 {
+			return fmt.Errorf("通道 %d 未加载文件", channel)
+		}
+		for _, band := range bands {
+			fx, err := BassChannelSetFXParamEQ(ch.StreamHandle)
+			if err != nil {
+				return err
+			}
+			if err := BassFXSetParamEQ(fx, band.Center, band.Bandwidth, band.Gain); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if result == nil {
+		return nil
 	}
+	return result.(error)
+}
 
-	be.freeAll()
-	BassFree()
-	be.inited = false
-	log.Info().Msg("BASS 引擎已关闭")
+// SetDevice 设置通道的输出设备
+func (be *BassEngine) SetDevice(channel int, deviceIndex int) error {
+	result := be.execIO(func() interface{} {
+		ch := be.channels.GetByIndex(channel)
+		if ch == nil {
+			return fmt.Errorf("未知通道索引: %d", channel)
+		}
+		if ch.StreamHandle == 0 {
+			return nil
+		}
+		return BassChannelSetDevice(ch.StreamHandle, deviceIndex)
+	})
+	if result == nil {
+		return nil
+	}
+	return result.(error)
+}
+
+// RemoveSync 移除通道同步回调
+func (be *BassEngine) RemoveSync(channel int) {
+	be.execIO(func() interface{} {
+		ch := be.channels.GetByIndex(channel)
+		if ch == nil {
+			return nil
+		}
+		if ch.SyncHandle != 0 && ch.StreamHandle != 0 {
+			BassChannelRemoveSync(ch.StreamHandle, ch.SyncHandle)
+			ch.SyncHandle = 0
+		}
+		return nil
+	})
+}
+
+// GetDeviceInfo 获取设备信息列表
+func (be *BassEngine) GetDeviceInfo() ([]BassDeviceInfo, error) {
+	result := be.execIO(func() interface{} {
+		return BassEnumDevices()
+	})
+	devices := result.([]BassDeviceInfo)
+	return devices, nil
+}
+
+// EQBandParam 均衡器频段参数
+type EQBandParam struct {
+	Center    float32
+	Bandwidth float32
+	Gain      float32
 }
 
 // ==================== 内部方法 ====================
@@ -394,7 +472,7 @@ func (be *BassEngine) freeAll() {
 // loadEncryptedFile 加载加密文件
 func (be *BassEngine) loadEncryptedFile(filePath string) (uint32, *BassFileUser, error) {
 	// 打开文件
-	f, err := openFile(filePath)
+	f, err := os.Open(filePath)
 	if err != nil {
 		return 0, nil, err
 	}

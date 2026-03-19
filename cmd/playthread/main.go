@@ -5,45 +5,84 @@ package main
 
 import (
 	"context"
+	"flag"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
 	"github.com/rixingyingyao/playthread-go/bridge"
+	"github.com/rixingyingyao/playthread-go/db"
+	"github.com/rixingyingyao/playthread-go/infra"
 	"github.com/rixingyingyao/playthread-go/infra/platform"
-	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-	"gopkg.in/lumberjack.v2"
+)
+
+var (
+	Version   = "dev"
+	BuildTime = "unknown"
 )
 
 func main() {
-	// 初始化日志
-	initLogger()
+	configPath := flag.String("config", "config.yaml", "配置文件路径")
+	flag.Parse()
 
-	// Windows 高精度定时器
+	cfg, err := infra.LoadConfig(*configPath)
+	if err != nil {
+		cfg = infra.DefaultConfig()
+		log.Warn().Err(err).Msg("加载配置文件失败，使用默认配置")
+	}
+
+	logCloser := infra.InitLogger(cfg.Log)
+	defer func() {
+		if c, ok := logCloser.(io.Closer); ok {
+			c.Close()
+		}
+	}()
+
 	platform.SetHighResTimer()
 	defer platform.RestoreTimer()
 
-	log.Info().Msg("Playthread 主控进程启动")
+	log.Info().Str("version", Version).Msg("Playthread 主控进程启动")
 
-	// 主上下文
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 计算播放服务子进程路径
+	database, err := db.Open(cfg.DB.Path)
+	if err != nil {
+		log.Fatal().Err(err).Msg("打开数据库失败")
+	}
+	defer database.Close()
+
+	if err := db.Migrate(database); err != nil {
+		log.Fatal().Err(err).Msg("数据库迁移失败")
+	}
+
+	snapshotMgr := infra.NewSnapshotManager("data")
+	if snapInfo, err := snapshotMgr.Load(); err == nil && snapInfo != nil {
+		log.Info().
+			Str("program", snapInfo.ProgramID).
+			Int("position_ms", snapInfo.Position).
+			Str("status", snapInfo.Status.String()).
+			Msg("检测到冷启动快照，后续 Phase 3 实现恢复逻辑")
+	}
+
 	exePath, err := os.Executable()
 	if err != nil {
 		log.Fatal().Err(err).Msg("获取可执行文件路径失败")
 	}
-	audioExePath := filepath.Join(filepath.Dir(exePath), "audio-service.exe")
+	audioExeName := "audio-service"
+	if runtime.GOOS == "windows" {
+		audioExeName += ".exe"
+	}
+	audioExePath := filepath.Join(filepath.Dir(exePath), audioExeName)
 
-	// 启动子进程管理器
 	pm := bridge.NewProcessManager(audioExePath, 5*time.Second)
 	pm.SetEventHandler(func(evt *bridge.IPCEvent) {
 		log.Info().Str("event", evt.Event).Msg("收到子进程事件")
-		// TODO: Phase 2 分发到业务层
 	})
 
 	if err := pm.Start(ctx); err != nil {
@@ -53,7 +92,6 @@ func main() {
 
 	log.Info().Msg("播放服务子进程已启动")
 
-	// 等待退出信号
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
@@ -62,21 +100,4 @@ func main() {
 
 	cancel()
 	log.Info().Msg("Playthread 主控进程退出")
-}
-
-func initLogger() {
-	fileWriter := &lumberjack.Logger{
-		Filename:   "logs/playthread.log",
-		MaxSize:    50,
-		MaxBackups: 30,
-		MaxAge:     30,
-		Compress:   true,
-	}
-
-	consoleWriter := zerolog.ConsoleWriter{Out: os.Stderr}
-
-	multi := zerolog.MultiLevelWriter(consoleWriter, fileWriter)
-	log.Logger = zerolog.New(multi).With().Timestamp().Caller().Logger()
-
-	zerolog.SetGlobalLevel(zerolog.InfoLevel)
 }

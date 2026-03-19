@@ -159,9 +159,9 @@ func (e *TransitionError) Error() string {
 
 | 操作 | 最大重试 | 间隔 | 降级方案 | 业务原因 |
 |------|---------|------|----------|----------|
-| **预卷(Cue)素材** | 3 次 | 200ms | 标记 CueFailed → 跳下条 | 文件可能正在下载中 |
-| **播出(Play)** | 1 次 | 100ms | 标记失败 → 延迟300ms触发播完事件跳下条 | 播出失败通常是素材问题 |
-| **信号切换** | 2 次 | 500ms | 记录错误日志 + 通知前端 | 切换器硬件可能短暂忙碌 |
+| **预卷(Cue)素材** | 3 次 | 200ms | ①重试预卷 ②文件不存在则触发下载重试 ③仍失败→标记 CueFailed→跳过此素材→递归找下条 | 文件可能正在下载中 |
+| **播出(Play)** | 1 次 | 100ms | 标记失败 → 延迟300ms注入PlayFinish事件 → 跳下条 | 播出失败通常是素材问题 |
+| **信号切换** | 2 次 | 500ms | 每次切换后强制等待 500ms（给切换器硬件反应时间）→ 失败则记录错误日志 + 通知前端 | 切换器硬件可能短暂忙碌 |
 | **文件下载** | 3 次 | 指数退避(1s/2s/4s) | 使用远程 URL 直接播放 | 网络波动常见 |
 | **心跳上报** | 不限次 | 10s-30s自然周期 | 本地暂存，联网后补传 | 心跳失败不影响播出 |
 | **日播单同步** | 3 次 | 指数退避(5s/15s/30s) | 使用本地缓存播单 | 播单是核心数据 |
@@ -1436,7 +1436,18 @@ type Switcher interface {
 
 ### 15.2 合法路径验证
 
-每次状态变更必须通过 `getPath()` 验证合法性。非法路径返回 `ErrPath` 并记录 Warn 日志。
+**重要：校验责任在调用者（PlayThread），不在 StateMachine 本身**。
+
+C# 原版 `SlvcStatusController.ChangeStatusTo()` 是**直接赋值**，不做任何合法性校验。校验逻辑在 `SlvcPlayThread.WorkThread` 中通过两步完成：
+
+1. 先调用 `GetPath()` 获取路径枚举
+2. 判断路径是否为 `ErrPath`，是则拒绝迁移
+
+Go 实现中 `StateMachine` 的设计选择：
+- **方案 A（推荐）**：`ChangeStatusTo()` 内置路径校验，非法路径返回错误——简化调用者逻辑，但与 C# 行为不完全一致
+- **方案 B（严格对齐）**：`ChangeStatusTo()` 直接赋值（与 C# 一致），校验由 `PlayThread` 在调用前执行
+
+**当前采用方案 A**，因为 Go 的错误处理范式天然支持这种"校验+变更原子化"的模式，且可避免遗漏校验。但必须注意：C# 中某些场景（如 `Stopped → Stopped`）会映射为 `Stop2Auto`（兜底行为），Go 实现必须保留此兜底逻辑。
 
 ### 15.3 状态变更日志
 
@@ -1448,6 +1459,61 @@ type Switcher interface {
 ### 15.4 事件通知
 
 状态变更后必须通知所有订阅者（通过 channel 或回调）。事件通知在锁外执行，防止死锁。
+
+### 15.5 双 goroutine 事件循环模型（对齐 C# PlaybackThread + WorkThread）
+
+C# 原版使用两个独立线程处理不同事件集，Go 版用两个独立 goroutine 对齐：
+
+| goroutine | 对应 C# 线程 | 职责 | 事件源 |
+|-----------|-------------|------|--------|
+| `playbackLoop` | PlaybackThread (Highest) | 处理 play_finished → 按状态分发 PlayNextClip | IPC play_finished 事件 |
+| `workLoop` | WorkThread (AboveNormal) | 处理状态迁移 + 通道空闲 + 定时到达 | API 指令 / 定时管理器 / 通道空闲事件 |
+
+**关键约束**：
+- 两个 goroutine 各自独立运行，通过 channel 接收事件
+- `playbackLoop` 在 Emergency 状态下调用独立的 `playNextEmrgClip()`（而非通用的 `playNextClip()`）
+- 两者之间通过共享的 `inPlayNext` 原子标志互斥（见下方 §15.6）
+
+### 15.6 定时任务与 PlayNext 互斥机制
+
+定时任务到达时，需要等待当前 PlayNextClip 完成（防止同时操作播出状态）：
+
+```go
+// 定时任务到达处理
+func (pt *PlayThread) onFixTimeArrived(task *FixTimeTask) {
+    // 等待 PlayNext 完成，最多 500ms
+    for i := 0; i < 50 && pt.inPlayNext.Load(); i++ {
+        time.Sleep(10 * time.Millisecond)
+    }
+    pt.inFixTime.Store(true)
+    defer pt.inFixTime.Store(false)
+    // ... 执行定时切换逻辑
+}
+
+// PlayNextClip 中检查定时标志
+func (pt *PlayThread) playNextClip(force bool) bool {
+    if pt.inFixTime.Load() {
+        return false // 定时任务正在执行，不抢占
+    }
+    pt.inPlayNext.Store(true)
+    defer pt.inPlayNext.Store(false)
+    // ... 播出逻辑
+}
+```
+
+### 15.7 软定时可被打断（SoftFixWaiting）
+
+软定时等待期间设置 `SoftFixWaiting = true`。如果此时用户播放 Jingle、临时单或手动切换状态，需取消当前软定时等待：
+
+```go
+if pt.softFixWaiting.Load() {
+    pt.cancelSoftFix() // 取消软定时等待
+}
+```
+
+### 15.8 淡出暂停（FadePause）
+
+定时任务切换时，当前播放不一定是"淡出停止"，可能是"淡出暂停"——降到目标音量后暂停流（不释放），定时节目播完后可恢复继续播放。Go 版通过 IPC 的 volume + pause 组合实现。
 
 ---
 

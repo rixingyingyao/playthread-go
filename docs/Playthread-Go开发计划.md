@@ -578,7 +578,11 @@ type Program struct {
 | 3.9 | PlayNextClip 重入防护（m_in_play_next + 500ms 超时） | `core/play_thread.go` |
 | 3.10 | Cue 失败 300ms 延迟注入 PlayFinish 事件 | `core/play_thread.go` |
 | 3.11 | 双重试机制（AddClip 失败后 goto agin 模式） | `core/play_thread.go` |
-| 3.12 | 单元测试（状态机全路径 + 决策树） | `core/*_test.go` |
+| 3.12 | 双 goroutine 事件循环（playbackLoop + workLoop） | `core/play_thread.go` |
+| 3.13 | 定时任务与 PlayNext 互斥机制（inPlayNext + inFixTime 双标志） | `core/play_thread.go` |
+| 3.14 | Emergency 独立播放方法 PlayNextEmrgClip | `core/play_thread.go` |
+| 3.15 | 信号切换 500ms 硬件延迟等待 | `core/play_thread.go` |
+| 3.16 | 单元测试（状态机全路径 + 决策树） | `core/*_test.go` |
 
 ### 7.3 关键设计
 
@@ -698,6 +702,60 @@ func (pt *PlayThread) playNextClip(force bool, taskType models.TaskType) bool {
 }
 ```
 
+#### 双 goroutine 事件循环模型（对齐 C# PlaybackThread + WorkThread）
+
+C# 原版使用两个独立线程各自 1ms WaitOne 循环。Go 版对齐为两个 goroutine：
+
+```go
+// playbackLoop (高优先级) — 处理播完事件
+// 对应 C# PlaybackThread (Priority=Highest)
+func (pt *PlayThread) playbackLoop(ctx context.Context) {
+    for {
+        select {
+        case <-pt.playFinishedCh:
+            switch pt.stateMachine.Status() {
+            case models.StatusAuto:
+                pt.playNextClip(false, models.TaskHard)
+            case models.StatusEmergency:
+                pt.playNextEmrgClip() // Emergency 有独立的播放方法
+            case models.StatusManual:
+                // 手动模式：等待操作员操作
+            }
+        case <-ctx.Done():
+            return
+        }
+    }
+}
+
+// workLoop (次优先级) — 处理状态迁移和通道空闲
+// 对应 C# WorkThread (Priority=AboveNormal)
+func (pt *PlayThread) workLoop(ctx context.Context) {
+    for {
+        select {
+        case cmd := <-pt.statusChangeCh:
+            pt.handleStatusChange(cmd)
+        case <-pt.channelEmptyCh:
+            pt.handleChannelEmpty()
+        case <-ctx.Done():
+            return
+        }
+    }
+}
+```
+
+#### 定时任务 20ms 双循环轮询设计（对齐 C# SlaFixTimeTaskManager）
+
+C# 使用两个独立 Task，各自 20ms 轮询：
+
+| 循环 | 职责 | 提前量 |
+|------|------|--------|
+| `fixThread_Elapsed` | 检测定时任务（硬/软定时） | 硬定时: fade_length=50ms；软定时: fade_length=0 |
+| `intercutThread_Elapsed` | 检测插播任务 | fade_length=max(PlayListFadeOutTime+10, 100ms) |
+
+**过期处理**：`nowtime - StartTime > 3000ms` 的任务直接移除（仅记录日志，不触发）。
+
+**同时间排序规则**：当两个定时任务的 StartTime 相同时，按 `ArrangeId` 升序排列（小的在前）。
+
 ### 7.4 测试重点
 
 - 状态机全 20 条合法路径测试
@@ -738,12 +796,15 @@ func (pt *PlayThread) playNextClip(force bool, taskType models.TaskType) bool {
 | 4.4 | 提前量计算（淡出时间 + 预卷时间） | `core/fix_time_manager.go` |
 | 4.5 | BlankManager（垫乐选曲 + 播放控制） | `core/blank_manager.go` |
 | 4.6 | 垫乐让位（定时到达时淡出垫乐） | `core/blank_manager.go` |
-| 4.7 | AI 选曲（按节目类型匹配垫乐） | `core/blank_manager.go` |
+| 4.7 | AI 智能选曲（两套素材列表 + 时间判断 + 轻音乐随机选择） | `core/blank_manager.go` |
 | 4.8 | 垫乐历史去重（LRU 策略 + "从未播放"快速返回） | `core/blank_manager.go` |
 | 4.9 | 垫乐三态管理（Prepare/Play/Stop） | `core/blank_manager.go` |
-| 4.10 | 软定时协作取消（SoftFixWaiting 标志位） | `core/fix_time_manager.go` |
-| 4.11 | EQ 均衡器动态切换（按时间块/节目类型） | `core/play_thread.go` |
-| 4.12 | 单元测试 + 精度基准测试 | `core/*_test.go` |
+| 4.10 | 垫乐 FadeToNext（淡出当前垫乐并切到下一首，非停止） | `core/blank_manager.go` |
+| 4.11 | 垫乐预卷失败重试 3 次 + 标记已播排到末尾（goto agin 模式） | `core/blank_manager.go` |
+| 4.12 | 软定时协作取消（SoftFixWaiting 标志位，可被 Jingle/临时单打断） | `core/fix_time_manager.go` |
+| 4.13 | EQ 均衡器动态切换（按时间块/节目类型） | `core/play_thread.go` |
+| 4.14 | 淡出暂停 FadePause（降到目标音量后暂停流，不释放） | `core/play_thread.go` |
+| 4.15 | 单元测试 + 精度基准测试 | `core/*_test.go` |
 
 ### 8.3 关键设计
 
@@ -789,18 +850,22 @@ func (fm *FixTimeManager) checkTasks(now time.Time) {
 }
 ```
 
-#### 垫乐管理
+#### 垫乐管理（对齐 C# SlaBlankTaskManager）
 
 ```go
 // BlankManager 垫乐管理器
 // 当播表无下条素材时自动启动垫乐填充，定时到达时自动让位
 type BlankManager struct {
     mu          sync.Mutex
-    playing     bool
-    history     []string          // 最近播放历史（去重用）
-    maxHistory  int               // 历史上限
-    blankFiles  []string          // 可用垫乐文件列表
-    adapter     *audio.Adapter    // 音频适配器
+    enabled     bool
+    clips       []*models.Program // 正常垫乐素材列表
+    clipsIdl    []*models.Program // 轻音乐素材列表（智能垫乐短时段用）
+    crntClip    *models.Program   // 当前正在播放的垫乐
+    history     *infra.BlankHistory
+    bridge      *bridge.AudioBridge
+    
+    // 智能垫乐回调：返回距下一个定时任务的时间(ms)
+    beforePadding func() int
 }
 
 func (bm *BlankManager) Start() {
@@ -827,13 +892,39 @@ func (bm *BlankManager) YieldTo(fadeOutMs int) {
     bm.mu.Lock()
     defer bm.mu.Unlock()
     
-    if !bm.playing {
+    if !bm.enabled {
         return
     }
     
-    bm.playing = false
+    bm.enabled = false
     log.Info().Int("fade_ms", fadeOutMs).Msg("垫乐让位")
     // 淡出停止...
+}
+
+// FadeToNext 淡出当前垫乐并切到下一首（不是停止垫乐）
+func (bm *BlankManager) FadeToNext() {
+    bm.mu.Lock()
+    defer bm.mu.Unlock()
+    if bm.enabled && bm.crntClip != nil {
+        // 停止当前 → 选下一首 → 预卷 → 播放
+    }
+}
+
+// getOldestClip 智能选曲（对齐 C# _GetOldestClip）
+// 1. 启用 AI 智能垫乐时：
+//    - 距下一定时 < AIPaddingTime → 随机选轻音乐（clipsIdl）
+//    - 距下一定时 >= AIPaddingTime → LRU 选正常垫乐（clips）
+// 2. 未启用 AI → 直接 LRU 选正常垫乐
+// 3. "从未播放"的素材优先返回（break 快速返回）
+// 4. 预卷失败的素材标记为已播（排到末尾），重试最多 3 次
+func (bm *BlankManager) getOldestClip() *models.Program {
+    if bm.cfg.EnableAI && bm.beforePadding != nil {
+        paddingTime := bm.beforePadding()
+        if paddingTime < bm.cfg.AIThresholdMs && len(bm.clipsIdl) > 0 {
+            return bm.clipsIdl[rand.Intn(len(bm.clipsIdl))]
+        }
+    }
+    return bm.lruSelect(bm.clips)
 }
 ```
 
@@ -885,7 +976,7 @@ func (bm *BlankManager) YieldTo(fadeOutMs int) {
 
 > **边界情况（必须覆盖）**：
 > - **嵌套插播位置丢失**：多层插播返回时，原播出位置可能已过期（被定时任务推进），需检测时间有效性
-> - **Cut_Return 补偿**：插播返回后的位置需加上 Cut_Return 常量偏移，避免重叠播出
+> - **Cut_Return 补偿**：进入插播时，保存的返回位置 = `当前位置 - Cut_Return`（C# 中 `Math.Max(0, CrntPosition - GlobalValue.Cut_Return)`），确保返回时有重叠段避免听感断裂。Cut_Return 为可配置常量，默认约 500ms
 > - **插播双标记一致性**：m_CutPlaying 和 PlayState.Cut 必须同步设置/清除
 > - **通道保持超时精度**：超时判断使用单调时钟，不受 NTP 调时影响
 

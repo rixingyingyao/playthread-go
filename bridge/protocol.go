@@ -2,7 +2,10 @@
 // 本包属于主控进程，通过 stdin/stdout JSON Line 协议与子进程通信。
 package bridge
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 // IPCRequest 主控 → 播放服务子进程的请求
 type IPCRequest struct {
@@ -22,6 +25,7 @@ type IPCResponse struct {
 type IPCEvent struct {
 	Event string          `json:"event"` // 事件名称
 	Data  json.RawMessage `json:"data"`  // 事件数据
+	Time  time.Time       `json:"time"`  // 事件时间戳
 }
 
 // --- IPC 方法名常量 ---

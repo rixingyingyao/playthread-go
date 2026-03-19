@@ -34,7 +34,7 @@ func (s PlayerState) String() string {
 // 对应 C# SlaCardPlayerAdapter。
 type CardPlayerAdapter struct {
 	mu      sync.Mutex
-	channel string      // 绑定的通道名
+	channel int         // 绑定的通道索引
 	state   PlayerState // 当前状态
 	engine  *BassEngine
 
@@ -44,7 +44,7 @@ type CardPlayerAdapter struct {
 }
 
 // NewCardPlayerAdapter 创建播卡适配器
-func NewCardPlayerAdapter(channel string, engine *BassEngine) *CardPlayerAdapter {
+func NewCardPlayerAdapter(channel int, engine *BassEngine) *CardPlayerAdapter {
 	return &CardPlayerAdapter{
 		channel:    channel,
 		state:      StateStopped,
@@ -61,13 +61,13 @@ func (a *CardPlayerAdapter) State() PlayerState {
 	return a.state
 }
 
-// Channel 获取绑定的通道名
-func (a *CardPlayerAdapter) Channel() string {
+// Channel 获取绑定的通道索引
+func (a *CardPlayerAdapter) Channel() int {
 	return a.channel
 }
 
 // Load 加载文件到通道
-func (a *CardPlayerAdapter) Load(filePath string, isEncrypt bool, volume float32) error {
+func (a *CardPlayerAdapter) Load(filePath string, isEncrypt bool, volume float64) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -78,7 +78,7 @@ func (a *CardPlayerAdapter) Load(filePath string, isEncrypt bool, volume float32
 	if err := a.engine.Load(a.channel, filePath, isEncrypt, volume); err != nil {
 		return err
 	}
-	log.Debug().Str("channel", a.channel).Str("file", filePath).Msg("适配器加载完成")
+	log.Debug().Int("channel", a.channel).Str("file", filePath).Msg("适配器加载完成")
 	return nil
 }
 
@@ -131,12 +131,12 @@ func (a *CardPlayerAdapter) Stop(fadeOut int) error {
 }
 
 // SetVolume 设置音量
-func (a *CardPlayerAdapter) SetVolume(volume float32) error {
+func (a *CardPlayerAdapter) SetVolume(volume float64) error {
 	return a.engine.SetVolume(a.channel, volume)
 }
 
 // GetPosition 获取播放位置（毫秒）和总时长（毫秒）
-func (a *CardPlayerAdapter) GetPosition() (int64, int64, error) {
+func (a *CardPlayerAdapter) GetPosition() (int, int, error) {
 	return a.engine.GetPosition(a.channel)
 }
 

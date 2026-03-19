@@ -14,19 +14,21 @@ import (
 // AudioBridge 音频桥接客户端，主控进程通过此组件与播放服务子进程通信。
 // 所有方法线程安全。
 type AudioBridge struct {
-	mu      sync.Mutex    // 保护 stdin 写入的串行化
-	stdin   io.Writer     // 子进程 stdin
-	pending sync.Map      // map[string]chan *IPCResponse — 等待响应的请求
-	eventCh chan *IPCEvent // 子进程推送的异步事件
-	timeout time.Duration // 请求超时
+	mu       sync.Mutex    // 保护 stdin 写入的串行化
+	stdin    io.Writer     // 子进程 stdin
+	pending  sync.Map      // map[string]chan *IPCResponse — 等待响应的请求
+	eventCh  chan *IPCEvent // 子进程推送的异步事件
+	timeout  time.Duration // 请求超时
+	closedCh chan struct{}  // readLoop 退出后关闭，通知所有等待者
 }
 
 // NewAudioBridge 创建音频桥接客户端
 func NewAudioBridge(stdin io.Writer, stdout io.Reader, timeout time.Duration) *AudioBridge {
 	ab := &AudioBridge{
-		stdin:   stdin,
-		eventCh: make(chan *IPCEvent, 64),
-		timeout: timeout,
+		stdin:    stdin,
+		eventCh:  make(chan *IPCEvent, 64),
+		timeout:  timeout,
+		closedCh: make(chan struct{}),
 	}
 	go ab.readLoop(stdout)
 	return ab
@@ -75,19 +77,22 @@ func (ab *AudioBridge) Call(method string, params interface{}) (*IPCResponse, er
 		return nil, fmt.Errorf("写入 stdin 失败: %w", err)
 	}
 
-	// 等待响应或超时
 	select {
 	case resp := <-respCh:
 		return resp, nil
+	case <-ab.closedCh:
+		return nil, fmt.Errorf("IPC 连接已断开: method=%s, id=%s", method, id)
 	case <-time.After(ab.timeout):
 		return nil, fmt.Errorf("IPC 请求超时: method=%s, id=%s, timeout=%v", method, id, ab.timeout)
 	}
 }
 
-// readLoop 持续读取子进程 stdout，分发响应和事件
+// readLoop 持续读取子进程 stdout，分发响应和事件。
+// 当 stdout 关闭（子进程退出/管道断裂）时关闭 closedCh 通知所有等待者。
 func (ab *AudioBridge) readLoop(stdout io.Reader) {
+	defer close(ab.closedCh)
+
 	scanner := bufio.NewScanner(stdout)
-	// 设置较大的缓冲区以防止超长行截断
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	for scanner.Scan() {

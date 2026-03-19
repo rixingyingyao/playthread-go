@@ -353,6 +353,14 @@ func BassFXGetParamEQ(fx uint32) (center, bandwidth, gain float32, err error) {
 
 // ==================== 加密文件流 ====================
 
+// fileReadPool 复用加密文件读取缓冲区，减少高频回调的 GC 压力
+var fileReadPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, 8192)
+		return &buf
+	},
+}
+
 // EncryptedFileItem 加密文件信息
 type EncryptedFileItem struct {
 	File   *os.File
@@ -440,13 +448,20 @@ func goFileReadProc(buffer unsafe.Pointer, length C.DWORD, user unsafe.Pointer) 
 	h := cgo.Handle(uintptr(user))
 	item := h.Value().(*EncryptedFileItem)
 
-	buf := make([]byte, int(length))
-	n, _ := item.File.Read(buf)
+	reqLen := int(length)
+	bufPtr := fileReadPool.Get().(*[]byte)
+	buf := *bufPtr
+	if len(buf) < reqLen {
+		buf = make([]byte, reqLen)
+		*bufPtr = buf
+	}
+	defer fileReadPool.Put(bufPtr)
+
+	n, _ := item.File.Read(buf[:reqLen])
 	if n <= 0 {
 		return 0
 	}
 
-	// XOR 解密
 	if item.XorKey != 0 {
 		for i := 0; i < n; i++ {
 			buf[i] ^= item.XorKey

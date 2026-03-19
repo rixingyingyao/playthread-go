@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/rixingyingyao/playthread-go/bridge"
 	"github.com/rs/zerolog"
@@ -17,19 +18,26 @@ import (
 // 从 stdin 读取 JSON Line 请求，通过 stdout 返回响应和推送事件。
 // stdout 独占用于 IPC 通信，所有日志输出到 stderr。
 type IPCServer struct {
-	mu     sync.Mutex   // 保护 stdout 写入
-	engine *BassEngine  // BASS 引擎
-	stdin  io.Reader
-	stdout io.Writer
+	mu         sync.Mutex   // 保护 stdout 写入
+	engine     *BassEngine  // BASS 引擎
+	stdin      io.Reader
+	stdout     io.Writer
+	shutdownCh chan struct{} // shutdown 信号通道
 }
 
 // NewIPCServer 创建 IPC 服务端
 func NewIPCServer(engine *BassEngine) *IPCServer {
 	return &IPCServer{
-		engine: engine,
-		stdin:  os.Stdin,
-		stdout: os.Stdout,
+		engine:     engine,
+		stdin:      os.Stdin,
+		stdout:     os.Stdout,
+		shutdownCh: make(chan struct{}),
 	}
+}
+
+// ShutdownCh 返回 shutdown 信号通道，外部通过此通道感知 shutdown 请求
+func (s *IPCServer) ShutdownCh() <-chan struct{} {
+	return s.shutdownCh
 }
 
 // InitLogging 初始化子进程日志——必须在最早时机调用。
@@ -99,6 +107,18 @@ func (s *IPCServer) handleRequest(req *bridge.IPCRequest) *bridge.IPCResponse {
 
 	case bridge.MethodLevel:
 		return s.handleLevel(req)
+
+	case bridge.MethodSetEQ:
+		return s.handleSetEQ(req)
+
+	case bridge.MethodSetDevice:
+		return s.handleSetDevice(req)
+
+	case bridge.MethodRemoveSync:
+		return s.handleRemoveSync(req)
+
+	case bridge.MethodDeviceInfo:
+		return s.handleDeviceInfo(req)
 
 	case bridge.MethodFreeChannel:
 		return s.handleFreeChannel(req)
@@ -233,13 +253,65 @@ func (s *IPCServer) handleFreeAll(req *bridge.IPCRequest) *bridge.IPCResponse {
 
 func (s *IPCServer) handleShutdown(req *bridge.IPCRequest) *bridge.IPCResponse {
 	log.Info().Msg("收到 shutdown 命令，准备退出")
-	resp := s.success(req.ID, nil)
-	// 响应发送后退出（由 main 处理 os.Exit）
 	go func() {
 		s.engine.Shutdown()
-		os.Exit(0)
+		select {
+		case s.shutdownCh <- struct{}{}:
+		default:
+		}
 	}()
-	return resp
+	return s.success(req.ID, nil)
+}
+
+func (s *IPCServer) handleSetEQ(req *bridge.IPCRequest) *bridge.IPCResponse {
+	var params bridge.EQParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return s.fail(req.ID, fmt.Sprintf("参数解析失败: %v", err))
+	}
+	bands := make([]EQBandParam, len(params.Bands))
+	for i, b := range params.Bands {
+		bands[i] = EQBandParam{
+			Center:    float32(b.Center),
+			Bandwidth: float32(b.Bandwidth),
+			Gain:      float32(b.Gain),
+		}
+	}
+	if err := s.engine.SetEQ(params.Channel, bands); err != nil {
+		return s.fail(req.ID, err.Error())
+	}
+	return s.success(req.ID, nil)
+}
+
+func (s *IPCServer) handleSetDevice(req *bridge.IPCRequest) *bridge.IPCResponse {
+	var params bridge.SetDeviceParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return s.fail(req.ID, fmt.Sprintf("参数解析失败: %v", err))
+	}
+	if err := s.engine.SetDevice(params.Channel, params.DeviceIndex); err != nil {
+		return s.fail(req.ID, err.Error())
+	}
+	return s.success(req.ID, nil)
+}
+
+func (s *IPCServer) handleRemoveSync(req *bridge.IPCRequest) *bridge.IPCResponse {
+	var params bridge.ChannelParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return s.fail(req.ID, fmt.Sprintf("参数解析失败: %v", err))
+	}
+	s.engine.RemoveSync(params.Channel)
+	return s.success(req.ID, nil)
+}
+
+func (s *IPCServer) handleDeviceInfo(req *bridge.IPCRequest) *bridge.IPCResponse {
+	devices, err := s.engine.GetDeviceInfo()
+	if err != nil {
+		return s.fail(req.ID, err.Error())
+	}
+	result := make([]bridge.DeviceInfo, len(devices))
+	for i, d := range devices {
+		result[i] = bridge.DeviceInfo{Index: i, Name: d.Name}
+	}
+	return s.success(req.ID, result)
 }
 
 // --- 响应辅助 ---
@@ -276,7 +348,10 @@ func (s *IPCServer) writeResponse(resp *bridge.IPCResponse) {
 
 // PushEvent 向主控推送异步事件
 func (s *IPCServer) PushEvent(event string, data interface{}) {
-	evt := bridge.IPCEvent{Event: event}
+	evt := bridge.IPCEvent{
+		Event: event,
+		Time:  time.Now(),
+	}
 	if data != nil {
 		raw, _ := json.Marshal(data)
 		evt.Data = raw

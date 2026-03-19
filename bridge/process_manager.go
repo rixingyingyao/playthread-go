@@ -22,6 +22,8 @@ type ProcessManager struct {
 	crashCount  int           // 连续崩溃计数
 	ipcTimeout  time.Duration // IPC 请求超时
 	onEvent     func(*IPCEvent) // 事件回调
+	waitDone    chan error     // cmd.Wait() 结果通知
+	stopping    bool          // 是否正在主动停止
 }
 
 // NewProcessManager 创建子进程管理器
@@ -83,14 +85,16 @@ func (pm *ProcessManager) startLocked(ctx context.Context) error {
 
 	pm.cmd = cmd
 	pm.bridge = NewAudioBridge(stdin, stdout, pm.ipcTimeout)
+	pm.waitDone = make(chan error, 1)
+	pm.stopping = false
 
-	// 读取 stderr 日志
+	// 单一 Wait() goroutine，防止双重调用
+	go func() {
+		pm.waitDone <- cmd.Wait()
+	}()
+
 	go pm.drainStderr(stderr)
-
-	// 转发事件
 	go pm.forwardEvents(childCtx)
-
-	// 监控子进程退出
 	go pm.watchProcess(ctx)
 
 	log.Info().Str("path", pm.exePath).Int("pid", cmd.Process.Pid).Msg("播放服务子进程已启动")
@@ -100,10 +104,9 @@ func (pm *ProcessManager) startLocked(ctx context.Context) error {
 // Stop 优雅停止子进程
 func (pm *ProcessManager) Stop() {
 	pm.mu.Lock()
-	defer pm.mu.Unlock()
+	pm.stopping = true
 
 	if pm.bridge != nil {
-		// 尝试优雅关闭
 		_ = pm.bridge.Shutdown()
 	}
 
@@ -111,39 +114,45 @@ func (pm *ProcessManager) Stop() {
 		pm.cancel()
 	}
 
-	if pm.cmd != nil && pm.cmd.Process != nil {
-		// 等待进程退出，最多 3 秒
-		done := make(chan struct{})
-		go func() {
-			_ = pm.cmd.Wait()
-			close(done)
-		}()
+	waitDone := pm.waitDone
+	cmd := pm.cmd
+	pm.mu.Unlock()
+
+	if cmd != nil && cmd.Process != nil && waitDone != nil {
 		select {
-		case <-done:
+		case <-waitDone:
 		case <-time.After(3 * time.Second):
-			_ = pm.cmd.Process.Kill()
+			_ = cmd.Process.Kill()
+			<-waitDone
 		}
 	}
 
+	pm.mu.Lock()
 	pm.bridge = nil
 	pm.cmd = nil
+	pm.mu.Unlock()
 	log.Info().Msg("播放服务子进程已停止")
 }
 
 // watchProcess 监控子进程退出，崩溃时自动重启
 func (pm *ProcessManager) watchProcess(parentCtx context.Context) {
-	if pm.cmd == nil {
+	if pm.waitDone == nil {
 		return
 	}
 
-	err := pm.cmd.Wait()
-
-	// 检查是否是主动停止
+	var err error
 	select {
+	case err = <-pm.waitDone:
 	case <-parentCtx.Done():
-		return // 主控正在退出，不重启
-	default:
+		return
 	}
+
+	pm.mu.Lock()
+	if pm.stopping {
+		pm.mu.Unlock()
+		return
+	}
+	pm.mu.Unlock()
 
 	// 子进程意外退出，执行重启
 	pm.mu.Lock()

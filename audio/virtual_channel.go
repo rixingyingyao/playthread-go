@@ -1,7 +1,6 @@
 package audio
 
 import (
-	"os"
 	"strconv"
 	"strings"
 )
@@ -191,7 +190,3 @@ func ParseCustomChannelIndex(deviceName string) int {
 	return -1
 }
 
-// openFile 打开文件（封装 os.Open）
-func openFile(path string) (*os.File, error) {
-	return os.Open(path)
-}
