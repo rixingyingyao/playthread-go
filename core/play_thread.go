@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -11,6 +12,17 @@ import (
 	"github.com/rixingyingyao/playthread-go/models"
 	"github.com/rs/zerolog/log"
 )
+
+// CueError 预卷/播出失败专用错误（区别于 TransitionError）
+type CueError struct {
+	Name    string
+	Reason  string
+	Attempt int
+}
+
+func (e *CueError) Error() string {
+	return fmt.Sprintf("预卷失败 %s: %s (重试 %d 次)", e.Name, e.Reason, e.Attempt)
+}
 
 // PlayThread 主播出编排器（对齐 C# SlvcPlayThread）。
 // 使用两个 goroutine（playbackLoop + workLoop）处理不同事件集。
@@ -25,8 +37,10 @@ type PlayThread struct {
 	fixTimeMgr *FixTimeManager
 	blankMgr   *BlankManager
 
-	playlist   *models.Playlist
-	currentPos int // FlatList 中当前播出索引
+	// 播出状态（mu 保护，多 goroutine 访问）
+	mu          sync.RWMutex
+	playlist    *models.Playlist
+	currentPos  int // FlatList 中当前播出索引
 	currentProg *models.Program
 
 	// 互斥标志（定时任务 vs PlayNext）
@@ -95,6 +109,8 @@ func NewPlayThread(
 
 // SetPlaylist 设置当前播表
 func (pt *PlayThread) SetPlaylist(pl *models.Playlist) {
+	pt.mu.Lock()
+	defer pt.mu.Unlock()
 	pt.playlist = pl
 	pl.Flatten()
 	pt.currentPos = 0
@@ -323,26 +339,43 @@ func (pt *PlayThread) playNextClip(force bool) bool {
 		<-pt.playNextLock
 	}()
 
+	pt.mu.Lock()
 	if pt.playlist == nil {
+		pt.mu.Unlock()
 		log.Warn().Msg("播表为空")
 		return false
 	}
 
+	// Step 1: 临近硬定时检查（对齐 C# 决策树 Step 1）
+	if !force && pt.fixTimeMgr.IsNearFixTask(pt.cfg.Playback.HardFixAdvanceMs) {
+		pt.mu.Unlock()
+		log.Debug().Msg("临近硬定时，不切换素材")
+		return false
+	}
+
 	// 循环查找可播素材（替代递归，避免深调用栈）
-	for pt.currentPos < pt.playlist.Len() {
+	const maxSkip = 20 // 连续跳过上限，防止播表全损坏时空转
+	skipped := 0
+	for pt.currentPos < pt.playlist.Len() && skipped < maxSkip {
 		program := pt.playlist.FindNext(pt.currentPos)
 		if program == nil {
 			break
 		}
 
-		if err := pt.cueAndPlay(program); err != nil {
+		pt.mu.Unlock()
+		err := pt.cueAndPlay(program)
+		pt.mu.Lock()
+
+		if err != nil {
 			log.Warn().Err(err).Str("name", program.Name).Int("pos", pt.currentPos).Msg("预卷/播出失败，尝试下条")
 			pt.currentPos++
+			skipped++
 			continue
 		}
 
 		pt.currentProg = program
 		pt.currentPos++
+		pt.mu.Unlock()
 
 		// 垫乐让位：主播出开始时停止垫乐
 		if pt.blankMgr.IsPlaying() {
@@ -361,6 +394,11 @@ func (pt *PlayThread) playNextClip(force bool) bool {
 		return true
 	}
 
+	if skipped >= maxSkip {
+		log.Error().Int("skipped", skipped).Msg("连续跳过素材过多，停止搜索")
+	}
+
+	pt.mu.Unlock()
 	log.Info().Msg("播表已到末尾，启动垫乐")
 	pt.setPaddingPlay(true)
 	return false
@@ -403,8 +441,10 @@ func (pt *PlayThread) cueAndPlay(program *models.Program) error {
 		return nil
 	}
 
-	return &models.TransitionError{
-		Reason: "预卷重试耗尽: " + program.Name,
+	return &CueError{
+		Name:    program.Name,
+		Reason:  "重试耗尽",
+		Attempt: maxRetry,
 	}
 }
 
@@ -460,7 +500,11 @@ func (pt *PlayThread) switchEQ(program *models.Program) {
 // 对齐 C# FadePause，用于垫乐接管前平滑暂停当前播放。
 // 通道保持暂停状态，定时节目播完后可通过 Resume 恢复。
 func (pt *PlayThread) fadePause(fadeOutMs int) {
-	if pt.audioBridge == nil || pt.currentProg == nil {
+	pt.mu.RLock()
+	hasProg := pt.currentProg != nil
+	pt.mu.RUnlock()
+
+	if pt.audioBridge == nil || !hasProg {
 		return
 	}
 
@@ -510,9 +554,12 @@ func (pt *PlayThread) executeSoftFix(evt FixTimeEvent) {
 func (pt *PlayThread) onEnterAuto() {
 	log.Info().Msg("进入自动播出模式")
 
-	// 初始化定时任务
-	if pt.playlist != nil {
-		pt.fixTimeMgr.InitFromPlaylist(pt.playlist, pt.playlist.Date)
+	pt.mu.RLock()
+	pl := pt.playlist
+	pt.mu.RUnlock()
+
+	if pl != nil {
+		pt.fixTimeMgr.InitFromPlaylist(pl, pl.Date)
 		pt.fixTimeMgr.Start()
 	}
 
@@ -522,13 +569,17 @@ func (pt *PlayThread) onEnterAuto() {
 func (pt *PlayThread) onReturnAuto() {
 	log.Info().Msg("返回自动播出模式")
 
-	// 重新初始化定时任务
-	if pt.playlist != nil {
-		pt.fixTimeMgr.InitFromPlaylist(pt.playlist, pt.playlist.Date)
+	pt.mu.RLock()
+	pl := pt.playlist
+	prog := pt.currentProg
+	pt.mu.RUnlock()
+
+	if pl != nil {
+		pt.fixTimeMgr.InitFromPlaylist(pl, pl.Date)
 		pt.fixTimeMgr.Start()
 	}
 
-	if pt.currentProg == nil {
+	if prog == nil {
 		pt.playNextClip(true)
 	}
 }
@@ -546,7 +597,10 @@ func (pt *PlayThread) stopPlayback() {
 	if pt.audioBridge != nil {
 		_ = pt.audioBridge.Stop(int(models.ChanMainOut), pt.cfg.Audio.FadeOutMs)
 	}
+
+	pt.mu.Lock()
 	pt.currentProg = nil
+	pt.mu.Unlock()
 	log.Info().Msg("播出已停止")
 }
 
@@ -568,6 +622,8 @@ func (pt *PlayThread) enterEmergencyMode() {
 }
 
 func (pt *PlayThread) currentProgID() string {
+	pt.mu.RLock()
+	defer pt.mu.RUnlock()
 	if pt.currentProg != nil {
 		return pt.currentProg.ID
 	}
@@ -592,7 +648,17 @@ func (pt *PlayThread) snapshotLoop(ctx context.Context) {
 }
 
 func (pt *PlayThread) saveSnapshot() {
-	if pt.snapshotMgr == nil || pt.currentProg == nil {
+	if pt.snapshotMgr == nil {
+		return
+	}
+
+	pt.mu.RLock()
+	prog := pt.currentProg
+	pos := pt.currentPos
+	pl := pt.playlist
+	pt.mu.RUnlock()
+
+	if prog == nil {
 		return
 	}
 
@@ -605,17 +671,17 @@ func (pt *PlayThread) saveSnapshot() {
 	}
 
 	info := &infra.PlayingInfo{
-		ProgramID:    pt.currentProg.ID,
-		ProgramName:  pt.currentProg.Name,
+		ProgramID:    prog.ID,
+		ProgramName:  prog.Name,
 		Position:     posMs,
 		Duration:     durMs,
 		Status:       pt.stateMachine.Status(),
-		SignalID:     pt.currentProg.SignalID,
+		SignalID:     prog.SignalID,
 		IsCutPlaying: pt.cutPlaying.Load(),
 	}
-	if pt.playlist != nil {
-		info.PlaylistID = pt.playlist.ID
-		info.ProgramIndex = pt.currentPos - 1
+	if pl != nil {
+		info.PlaylistID = pl.ID
+		info.ProgramIndex = pos - 1
 	}
 
 	if err := pt.snapshotMgr.Save(info); err != nil {
@@ -663,13 +729,17 @@ func (pt *PlayThread) Resume() {
 	log.Info().Msg("播出已恢复")
 }
 
-// CurrentProgram 获取当前正在播出的素材
+// CurrentProgram 获取当前正在播出的素材（线程安全）
 func (pt *PlayThread) CurrentProgram() *models.Program {
+	pt.mu.RLock()
+	defer pt.mu.RUnlock()
 	return pt.currentProg
 }
 
-// CurrentPosition 获取当前播出位置
+// CurrentPosition 获取当前播出位置（线程安全）
 func (pt *PlayThread) CurrentPosition() int {
+	pt.mu.RLock()
+	defer pt.mu.RUnlock()
 	return pt.currentPos
 }
 
