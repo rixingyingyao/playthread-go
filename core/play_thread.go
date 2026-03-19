@@ -62,6 +62,9 @@ type PlayThread struct {
 
 	// EQ 均衡器当前名称
 	currentEQ string
+
+	// goroutine 生命周期跟踪
+	wg sync.WaitGroup
 }
 
 // NewPlayThread 创建播出编排器
@@ -119,13 +122,28 @@ func (pt *PlayThread) SetPlaylist(pl *models.Playlist) {
 
 // Run 启动播出编排器（启动两个事件循环 goroutine + 定时管理器）
 func (pt *PlayThread) Run(ctx context.Context) {
-	go pt.playbackLoop(ctx)
-	go pt.workLoop(ctx)
-	go pt.snapshotLoop(ctx)
+	pt.wg.Add(3)
+	go func() {
+		defer pt.wg.Done()
+		pt.playbackLoop(ctx)
+	}()
+	go func() {
+		defer pt.wg.Done()
+		pt.workLoop(ctx)
+	}()
+	go func() {
+		defer pt.wg.Done()
+		pt.snapshotLoop(ctx)
+	}()
 
 	pt.fixTimeMgr.Run(ctx)
 
 	log.Info().Msg("PlayThread 已启动")
+}
+
+// Wait 等待所有 goroutine 退出（优雅关闭时调用）
+func (pt *PlayThread) Wait() {
+	pt.wg.Wait()
 }
 
 // FixTimeManager 返回定时任务管理器

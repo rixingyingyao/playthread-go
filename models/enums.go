@@ -44,7 +44,7 @@ const (
 	Live2Manual  PathType = 13
 	Manual2Live  PathType = 14
 	Stop2Live    PathType = 15
-	Live2Stop    PathType = 16
+	Live2Stop    PathType = 16 // 保留值：C# 定义但非合法路径（Live 不可直接到 Stopped）
 	Live2Delay   PathType = 17
 	Delay2Live   PathType = 18
 	Stop2Delay   PathType = 19
