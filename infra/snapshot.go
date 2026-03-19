@@ -87,13 +87,12 @@ func CalcRecoveryPosition(info *PlayingInfo) int {
 	pos := info.Position + int(elapsed.Milliseconds())
 
 	if pos > info.Duration {
-		return -1 // 已超过总时长，应播下一条
+		return -1
 	}
 
-	// 入点容错：< 2s 从头播，< 1s 强制为 1s
-	if pos < 2000 {
+	if pos < 1000 {
 		pos = 0
-	} else if pos < 1000 {
+	} else if pos < 2000 {
 		pos = 1000
 	}
 

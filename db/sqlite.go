@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"github.com/rs/zerolog/log"
 	_ "modernc.org/sqlite"
@@ -18,6 +19,7 @@ type DB struct {
 	conn    *sql.DB
 	writeCh chan writeJob
 	wg      sync.WaitGroup
+	closed  int32
 }
 
 type writeJob struct {
@@ -63,6 +65,9 @@ func (d *DB) Conn() *sql.DB {
 
 // Write 提交写操作到串行化队列并等待完成
 func (d *DB) Write(fn func(*sql.DB) error) error {
+	if atomic.LoadInt32(&d.closed) == 1 {
+		return fmt.Errorf("数据库已关闭")
+	}
 	errCh := make(chan error, 1)
 	d.writeCh <- writeJob{fn: fn, errCh: errCh}
 	return <-errCh
@@ -93,6 +98,7 @@ func (d *DB) writeLoop() {
 
 // Close 关闭数据库连接
 func (d *DB) Close() error {
+	atomic.StoreInt32(&d.closed, 1)
 	close(d.writeCh)
 	d.wg.Wait()
 	if err := d.conn.Close(); err != nil {

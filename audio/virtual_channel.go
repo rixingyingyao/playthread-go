@@ -3,63 +3,28 @@ package audio
 import (
 	"strconv"
 	"strings"
+
+	"github.com/rixingyingyao/playthread-go/models"
 )
 
-// ChannelName 通道名称枚举
-type ChannelName int
+// 直接使用 models 包的 ChannelName，避免重复定义
+type ChannelName = models.ChannelName
 
 const (
-	ChanMainOut   ChannelName = iota // 主播出
-	ChanPreview1                     // 预听1
-	ChanPreview2                     // 预听2
-	ChanPreview3                     // 预听3
-	ChanPreview4                     // 预听4
-	ChanPreview5                     // 预听5
-	ChanPreview6                     // 预听6
-	ChanPreview7                     // 预听7
-	ChanFillBlank                    // 垫乐/补白
-	ChanTellTime                     // 报时
-	ChanEffect                       // 音效
-	ChanTempList                     // 临时播表
-	ChanCount                        // 通道总数（哨兵值）
+	ChanMainOut   = models.ChanMainOut
+	ChanPreview1  = models.ChanPreview1
+	ChanPreview2  = models.ChanPreview2
+	ChanPreview3  = models.ChanPreview3
+	ChanPreview4  = models.ChanPreview4
+	ChanPreview5  = models.ChanPreview5
+	ChanPreview6  = models.ChanPreview6
+	ChanPreview7  = models.ChanPreview7
+	ChanFillBlank = models.ChanFillBlank
+	ChanTellTime  = models.ChanTellTime
+	ChanEffect    = models.ChanEffect
+	ChanTempList  = models.ChanTempList
+	ChanCount     = models.ChanCount
 )
-
-// channelNames 通道名到枚举映射
-var channelNames = map[string]ChannelName{
-	"MainOut":   ChanMainOut,
-	"Preview1":  ChanPreview1,
-	"Preview2":  ChanPreview2,
-	"Preview3":  ChanPreview3,
-	"Preview4":  ChanPreview4,
-	"Preview5":  ChanPreview5,
-	"Preview6":  ChanPreview6,
-	"Preview7":  ChanPreview7,
-	"FillBlank": ChanFillBlank,
-	"TellTime":  ChanTellTime,
-	"Effect":    ChanEffect,
-	"TempList":  ChanTempList,
-}
-
-// channelStrings 枚举到字符串映射
-var channelStrings = [ChanCount]string{
-	"MainOut", "Preview1", "Preview2", "Preview3",
-	"Preview4", "Preview5", "Preview6", "Preview7",
-	"FillBlank", "TellTime", "Effect", "TempList",
-}
-
-// String 返回通道名称字符串
-func (cn ChannelName) String() string {
-	if cn >= 0 && cn < ChanCount {
-		return channelStrings[cn]
-	}
-	return "Unknown"
-}
-
-// ParseChannelName 解析通道名称字符串
-func ParseChannelName(name string) (ChannelName, bool) {
-	cn, ok := channelNames[name]
-	return cn, ok
-}
 
 // VirtualChannel 虚拟通道
 type VirtualChannel struct {

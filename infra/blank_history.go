@@ -20,10 +20,11 @@ type BlankHistoryItem struct {
 
 // BlankHistory 垫乐播放历史管理器（对齐 C# SlaBlankPlayInfo 单例）
 type BlankHistory struct {
-	mu      sync.Mutex
-	Items   []BlankHistoryItem `xml:"BlankPlayHistory>BlankHistoryItem" json:"items"`
-	dir     string
-	keepDays int
+	XMLName  xml.Name           `xml:"SlaBlankPlayInfo"`
+	mu       sync.Mutex         `xml:"-"`
+	Items    []BlankHistoryItem  `xml:"BlankPlayHistory>BlankHistoryItem" json:"items"`
+	dir      string             `xml:"-"`
+	keepDays int                `xml:"-"`
 }
 
 // NewBlankHistory 创建垫乐历史管理器
