@@ -428,18 +428,18 @@ func (pt *PlayThread) setPaddingPlay(enable bool) {
 
 // --- EQ 均衡器 ---
 
-// switchEQ 根据节目类型动态切换 EQ 均衡器（Phase 4 任务 4.13）
+// switchEQ 根据所属时间块动态切换 EQ 均衡器（Phase 4 任务 4.13）。
+// 当素材的 BlockIndex 对应 TimeBlock 的 EQName 变化时，通过 IPC 设置新 EQ。
 func (pt *PlayThread) switchEQ(program *models.Program) {
-	if program == nil {
+	if program == nil || pt.playlist == nil {
 		return
 	}
 
-	// 根据所属时间块确定 EQ 名称
-	eqName := ""
-	if pt.playlist != nil && program.BlockIndex >= 0 && program.BlockIndex < len(pt.playlist.Blocks) {
-		eqName = pt.playlist.Blocks[program.BlockIndex].EQName
+	if program.BlockIndex < 0 || program.BlockIndex >= len(pt.playlist.Blocks) {
+		return
 	}
 
+	eqName := pt.playlist.Blocks[program.BlockIndex].EQName
 	if eqName == "" || eqName == pt.currentEQ {
 		return
 	}
@@ -447,25 +447,29 @@ func (pt *PlayThread) switchEQ(program *models.Program) {
 	pt.currentEQ = eqName
 	log.Info().Str("eq", eqName).Str("program", program.Name).Msg("EQ 均衡器切换")
 
-	pt.eventBus.Emit(models.NewBroadcastEvent(models.EventJingleControl, models.JingleControlEvent{
-		IsFadeOut: false,
-	}))
+	if pt.audioBridge != nil {
+		if err := pt.audioBridge.SetEQ(int(models.ChanMainOut), eqName, nil); err != nil {
+			log.Warn().Err(err).Str("eq", eqName).Msg("设置 EQ 均衡器失败")
+		}
+	}
 }
 
 // --- FadePause 淡出暂停 ---
 
 // fadePause 淡出到目标音量后暂停流，不释放（Phase 4 任务 4.14）。
-// 对齐 C# FadePause，用于定时到达前平滑暂停当前播放。
+// 对齐 C# FadePause，用于垫乐接管前平滑暂停当前播放。
+// 通道保持暂停状态，定时节目播完后可通过 Resume 恢复。
 func (pt *PlayThread) fadePause(fadeOutMs int) {
-	if pt.audioBridge == nil {
-		return
-	}
-	if pt.currentProg == nil {
+	if pt.audioBridge == nil || pt.currentProg == nil {
 		return
 	}
 
-	_ = pt.audioBridge.Stop(int(models.ChanMainOut), fadeOutMs)
-	log.Debug().Int("fade_ms", fadeOutMs).Msg("主播出淡出暂停")
+	if err := pt.audioBridge.FadePause(int(models.ChanMainOut), 0, fadeOutMs); err != nil {
+		log.Warn().Err(err).Int("fade_ms", fadeOutMs).Msg("主播出淡出暂停失败，改用 Stop")
+		_ = pt.audioBridge.Stop(int(models.ChanMainOut), fadeOutMs)
+	} else {
+		log.Debug().Int("fade_ms", fadeOutMs).Msg("主播出淡出暂停")
+	}
 }
 
 // --- 辅助方法 ---

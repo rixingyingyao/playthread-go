@@ -160,9 +160,9 @@ func (bm *BlankManager) Prepare() bool {
 // Play 开始播放垫乐
 func (bm *BlankManager) Play() bool {
 	bm.mu.Lock()
-	defer bm.mu.Unlock()
 
 	if bm.state == BlankPlaying {
+		bm.mu.Unlock()
 		return true
 	}
 
@@ -179,6 +179,7 @@ func (bm *BlankManager) Play() bool {
 			log.Error().Err(err).Msg("垫乐播出失败")
 			bm.state = BlankStopped
 			bm.crntClip = nil
+			bm.mu.Unlock()
 			return false
 		}
 	}
@@ -193,17 +194,15 @@ func (bm *BlankManager) Play() bool {
 
 	bm.mu.Unlock()
 	bm.eventBus.Emit(models.NewBroadcastEvent(models.EventBlankStarted, nil))
-	bm.mu.Lock()
-
 	return true
 }
 
 // Stop 停止垫乐（带淡出）
 func (bm *BlankManager) Stop() {
 	bm.mu.Lock()
-	defer bm.mu.Unlock()
 
 	if bm.state == BlankStopped {
+		bm.mu.Unlock()
 		return
 	}
 
@@ -220,12 +219,10 @@ func (bm *BlankManager) Stop() {
 
 	bm.state = BlankStopped
 	bm.crntClip = nil
-
 	log.Info().Str("name", clipName).Msg("垫乐已停止")
 
 	bm.mu.Unlock()
 	bm.eventBus.Emit(models.NewBroadcastEvent(models.EventBlankStopped, nil))
-	bm.mu.Lock()
 }
 
 // StartIfNeeded 启动垫乐（如果未播放则预卷+播放）
@@ -276,6 +273,13 @@ func (bm *BlankManager) FadeToNext() bool {
 		return false
 	}
 
+	if bm.bridge != nil {
+		_ = bm.bridge.Stop(int(models.ChanFillBlank), bm.fadeOutMs)
+	}
+
+	bm.state = BlankStopped
+	bm.crntClip = nil
+
 	nextClip := bm.selectClip()
 	if nextClip == nil {
 		bm.mu.Unlock()
@@ -283,15 +287,6 @@ func (bm *BlankManager) FadeToNext() bool {
 		return false
 	}
 
-	if bm.bridge != nil {
-		_ = bm.bridge.Stop(int(models.ChanFillBlank), bm.fadeOutMs)
-	}
-
-	bm.state = BlankStopped
-	bm.crntClip = nil
-	bm.mu.Unlock()
-
-	bm.mu.Lock()
 	for attempt := 0; attempt <= bm.cueRetry; attempt++ {
 		if attempt > 0 {
 			bm.markPlayed(nextClip)
@@ -303,7 +298,10 @@ func (bm *BlankManager) FadeToNext() bool {
 		}
 
 		if bm.bridge == nil {
-			break
+			bm.crntClip = nextClip
+			bm.state = BlankPlaying
+			bm.mu.Unlock()
+			return true
 		}
 
 		err := bm.bridge.Load(

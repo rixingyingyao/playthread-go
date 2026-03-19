@@ -137,10 +137,17 @@ type SetDeviceParams struct {
 	DeviceIndex int `json:"device_index"` // 设备索引
 }
 
+// PauseParams 暂停参数
+type PauseParams struct {
+	Channel int `json:"channel"`  // 通道索引
+	FadeMs  int `json:"fade_ms"`  // 淡出到暂停的时长(ms)，0=立即暂停
+}
+
 // EQParams 均衡器参数
 type EQParams struct {
 	Channel int       `json:"channel"` // 通道索引
-	Bands   []EQBand  `json:"bands"`   // 均衡器频段
+	Preset  string    `json:"preset"`  // 预设名称（为空则使用 Bands 自定义）
+	Bands   []EQBand  `json:"bands"`   // 均衡器频段（Preset 为空时使用）
 }
 
 // EQBand 均衡器频段

@@ -210,6 +210,51 @@ func (ab *AudioBridge) GetPosition(channel int) (*PositionResult, error) {
 	return &result, nil
 }
 
+// Pause 暂停指定通道（支持淡出暂停）
+func (ab *AudioBridge) Pause(channel int, fadeMs int) error {
+	resp, err := ab.Call(MethodPause, &PauseParams{Channel: channel, FadeMs: fadeMs})
+	if err != nil {
+		return err
+	}
+	if resp.Error != "" {
+		return fmt.Errorf("暂停失败: %s", resp.Error)
+	}
+	return nil
+}
+
+// Resume 恢复指定通道
+func (ab *AudioBridge) Resume(channel int) error {
+	resp, err := ab.Call(MethodResume, &ChannelParams{Channel: channel})
+	if err != nil {
+		return err
+	}
+	if resp.Error != "" {
+		return fmt.Errorf("恢复失败: %s", resp.Error)
+	}
+	return nil
+}
+
+// SetEQ 设置均衡器
+func (ab *AudioBridge) SetEQ(channel int, preset string, bands []EQBand) error {
+	resp, err := ab.Call(MethodSetEQ, &EQParams{Channel: channel, Preset: preset, Bands: bands})
+	if err != nil {
+		return err
+	}
+	if resp.Error != "" {
+		return fmt.Errorf("设置均衡器失败: %s", resp.Error)
+	}
+	return nil
+}
+
+// FadePause 淡出暂停：降到目标音量后暂停流（不释放通道）。
+// 用于硬定时切换时保留当前流，定时节目播完后可恢复。
+func (ab *AudioBridge) FadePause(channel int, targetVol float64, fadeMs int) error {
+	if err := ab.SetVolume(channel, targetVol, fadeMs); err != nil {
+		return fmt.Errorf("FadePause 降音量失败: %w", err)
+	}
+	return ab.Pause(channel, 0)
+}
+
 // Ping 心跳检测
 func (ab *AudioBridge) Ping() error {
 	resp, err := ab.Call(MethodPing, nil)
