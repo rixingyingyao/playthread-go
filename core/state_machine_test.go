@@ -3,6 +3,7 @@ package core
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/rixingyingyao/playthread-go/models"
 )
@@ -166,8 +167,8 @@ func TestStateMachine_OnChangeCallback(t *testing.T) {
 
 	select {
 	case <-called:
-	case <-make(chan struct{}):
-		t.Error("onChange 回调未被调用")
+	case <-time.After(1 * time.Second):
+		t.Error("onChange 回调未被调用（超时1秒）")
 	}
 }
 

@@ -91,7 +91,7 @@ func (sm *StateMachine) ChangeStatusTo(target models.Status, reason string) (mod
 		Msg("状态变更")
 
 	if onChange != nil {
-		go onChange(current, target, path)
+		onChange(current, target, path)
 	}
 
 	return path, nil

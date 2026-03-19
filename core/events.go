@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/rixingyingyao/playthread-go/models"
+	"github.com/rs/zerolog/log"
 )
 
 // EventBus 核心事件总线，使用有缓冲 channel 进行 goroutine 间通信。
@@ -51,6 +52,7 @@ func (eb *EventBus) Emit(event models.BroadcastEvent) {
 	select {
 	case eb.Broadcast <- event:
 	default:
+		log.Warn().Str("type", string(event.Type)).Msg("广播事件丢弃：channel 满")
 	}
 
 	eb.mu.RLock()
