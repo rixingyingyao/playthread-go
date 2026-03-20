@@ -2,6 +2,7 @@ package audio
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,12 +19,13 @@ import (
 // 从 stdin 读取 JSON Line 请求，通过 stdout 返回响应和推送事件。
 // stdout 独占用于 IPC 通信，所有日志输出到 stderr。
 type IPCServer struct {
-	mu         sync.Mutex   // 保护 stdout 写入
-	engine     *BassEngine  // BASS 引擎
-	recorder   *Recorder    // 录音器
-	stdin      io.Reader
-	stdout     io.Writer
-	shutdownCh chan struct{} // shutdown 信号通道
+	mu             sync.Mutex        // 保护 stdout 写入
+	engine         *BassEngine       // BASS 引擎
+	recorder       *Recorder         // 录音器
+	stdin          io.Reader
+	stdout         io.Writer
+	shutdownCh     chan struct{}      // shutdown 信号通道
+	progressCancel context.CancelFunc // 取消当前 pushRecordProgress goroutine
 }
 
 // NewIPCServer 创建 IPC 服务端
@@ -349,13 +351,17 @@ func (s *IPCServer) handleRecordStart(req *bridge.IPCRequest) *bridge.IPCRespons
 		return s.fail(req.ID, err.Error())
 	}
 
-	// 启动进度推送 goroutine
-	go s.pushRecordProgress()
+	// 取消旧的进度推送协程（若有），再启动新的
+	s.stopProgressPush()
+	ctx, cancel := context.WithCancel(context.Background())
+	s.progressCancel = cancel
+	go s.pushRecordProgress(ctx)
 
 	return s.success(req.ID, nil)
 }
 
 func (s *IPCServer) handleRecordStop(req *bridge.IPCRequest) *bridge.IPCResponse {
+	s.stopProgressPush()
 	if err := s.recorder.Stop(); err != nil {
 		return s.fail(req.ID, err.Error())
 	}
@@ -377,10 +383,35 @@ func (s *IPCServer) handleRecordStatus(req *bridge.IPCRequest) *bridge.IPCRespon
 	})
 }
 
-// pushRecordProgress 从录音器 ProgressCh 消费进度并通过 IPC 推送给主控
-func (s *IPCServer) pushRecordProgress() {
-	for progress := range s.recorder.ProgressCh() {
-		s.PushEvent(bridge.EventRecordProgress, progress)
+// stopProgressPush 取消当前进度推送协程
+func (s *IPCServer) stopProgressPush() {
+	if s.progressCancel != nil {
+		s.progressCancel()
+		s.progressCancel = nil
+	}
+}
+
+// pushRecordProgress 从录音器 ProgressCh 消费进度并通过 IPC 推送给主控。
+// 受 ctx 控制生命周期，录音停止时 ctx 被取消，协程退出。
+func (s *IPCServer) pushRecordProgress(ctx context.Context) {
+	ch := s.recorder.ProgressCh()
+	for {
+		select {
+		case <-ctx.Done():
+			// 排空残余进度
+			for {
+				select {
+				case <-ch:
+				default:
+					return
+				}
+			}
+		case progress, ok := <-ch:
+			if !ok {
+				return
+			}
+			s.PushEvent(bridge.EventRecordProgress, progress)
+		}
 	}
 }
 
