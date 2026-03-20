@@ -119,7 +119,12 @@ func (s *Server) buildRouter(cfg *infra.ServerConfig) chi.Router {
 		r.Get("/datasource", s.handleGetDatasource)
 		r.Get("/monitor", s.handleGetMonitor)
 		r.Post("/update", s.handleTriggerUpdate)
+		r.Get("/system", s.handleSystemInfo)
+		r.Get("/goroutines", s.handleGoroutines)
 	})
+
+	// 可视化监控仪表盘
+	r.Get("/dashboard", s.handleDashboard)
 
 	return r
 }
