@@ -172,6 +172,11 @@ func (bm *BlankManager) Play() bool {
 			return false
 		}
 		bm.mu.Lock()
+		// 重新加锁后校验状态：窗口期内可能被 Stop()/YieldTo() 改回 Stopped
+		if bm.state != BlankPrepared {
+			bm.mu.Unlock()
+			return false
+		}
 	}
 
 	if bm.bridge != nil {
@@ -266,6 +271,7 @@ func (bm *BlankManager) YieldTo(fadeOutMs int) {
 
 // FadeToNext 淡出当前垫乐并切到下一首（不是停止垫乐，对齐 C# FadeToNext）。
 // 播完事件触发时调用，实现垫乐无缝循环。
+// IPC 调用在锁外执行，避免子进程卡住时冻结所有垫乐操作。
 func (bm *BlankManager) FadeToNext() bool {
 	bm.mu.Lock()
 	if !bm.enabled || bm.state != BlankPlaying {
@@ -273,13 +279,17 @@ func (bm *BlankManager) FadeToNext() bool {
 		return false
 	}
 
-	if bm.bridge != nil {
-		_ = bm.bridge.Stop(int(models.ChanFillBlank), bm.fadeOutMs)
-	}
-
+	fadeMs := bm.fadeOutMs
 	bm.state = BlankStopped
 	bm.crntClip = nil
+	bm.mu.Unlock()
 
+	// IPC: 淡出停止当前垫乐（锁外执行）
+	if bm.bridge != nil {
+		_ = bm.bridge.Stop(int(models.ChanFillBlank), fadeMs)
+	}
+
+	bm.mu.Lock()
 	nextClip := bm.selectClip()
 	if nextClip == nil {
 		bm.mu.Unlock()
@@ -304,20 +314,33 @@ func (bm *BlankManager) FadeToNext() bool {
 			return true
 		}
 
-		err := bm.bridge.Load(
-			int(models.ChanFillBlank),
-			nextClip.FilePath,
-			nextClip.IsEncrypt,
-			nextClip.Volume,
-			nextClip.FadeIn,
-		)
-		if err != nil {
-			log.Warn().Err(err).Str("name", nextClip.Name).Msg("垫乐 FadeToNext 预卷失败")
+		filePath := nextClip.FilePath
+		isEncrypt := nextClip.IsEncrypt
+		volume := nextClip.Volume
+		fadeIn := nextClip.FadeIn
+		bm.mu.Unlock()
+
+		// IPC: 加载 + 播放（锁外执行）
+		loadErr := bm.bridge.Load(int(models.ChanFillBlank), filePath, isEncrypt, volume, fadeIn)
+
+		bm.mu.Lock()
+		if loadErr != nil {
+			log.Warn().Err(loadErr).Str("name", nextClip.Name).Msg("垫乐 FadeToNext 预卷失败")
 			continue
 		}
 
-		if err := bm.bridge.Play(int(models.ChanFillBlank), true); err != nil {
-			log.Error().Err(err).Msg("垫乐 FadeToNext 播出失败")
+		// 锁外期间状态可能被改变
+		if !bm.enabled {
+			bm.mu.Unlock()
+			return false
+		}
+
+		bm.mu.Unlock()
+		playErr := bm.bridge.Play(int(models.ChanFillBlank), true)
+		bm.mu.Lock()
+
+		if playErr != nil {
+			log.Error().Err(playErr).Msg("垫乐 FadeToNext 播出失败")
 			continue
 		}
 

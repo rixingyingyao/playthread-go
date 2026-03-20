@@ -61,11 +61,41 @@ type FixTimeArrivedEvent struct {
 	DelayMs    int      `json:"delay_ms"` // 淡出延时(ms)
 }
 
-// IntercutArrivedEvent 插播到达事件
+// IntercutArrivedEvent 插播到达事件（已废弃，保留兼容）
 type IntercutArrivedEvent struct {
 	ID      string       `json:"id"`
 	Type    IntercutType `json:"type"`
 	DelayMs int          `json:"delay_ms"`
+}
+
+// IntercutStartedEvent 插播开始事件（Phase 5 新增，含深度和被插播信息）
+type IntercutStartedEvent struct {
+	ID              string       `json:"id"`
+	Type            IntercutType `json:"type"`
+	Depth           int          `json:"depth"`
+	InterruptedProg string       `json:"interrupted_prog"`
+}
+
+// IntercutEndedEvent 插播结束事件
+type IntercutEndedEvent struct {
+	ID          string `json:"id"`
+	ReturnProg  string `json:"return_prog"`
+	ReturnPosMs int    `json:"return_pos_ms"`
+}
+
+// ChannelHoldEvent 通道保持事件
+type ChannelHoldEvent struct {
+	SignalID    int    `json:"signal_id"`
+	SignalName  string `json:"signal_name"`
+	DurationMs  int    `json:"duration_ms"`
+	ProgramName string `json:"program_name,omitempty"`
+	IsAIDelay   bool   `json:"is_ai_delay"`
+}
+
+// ChannelHoldReturnEvent 通道保持返回事件
+type ChannelHoldReturnEvent struct {
+	ManualCancel bool `json:"manual_cancel"`
+	ElapsedMs    int  `json:"elapsed_ms"`
 }
 
 // ChannelEmptyEvent 通道空闲事件（播完后无下条素材）

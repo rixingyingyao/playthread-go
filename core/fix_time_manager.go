@@ -52,6 +52,7 @@ type FixTimeManager struct {
 	eventBus *EventBus
 
 	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // NewFixTimeManager 创建定时任务管理器
@@ -77,8 +78,15 @@ func (fm *FixTimeManager) Run(ctx context.Context) {
 	childCtx, cancel := context.WithCancel(ctx)
 	fm.cancel = cancel
 
-	go fm.fixLoop(childCtx)
-	go fm.intercutLoop(childCtx)
+	fm.wg.Add(2)
+	go func() {
+		defer fm.wg.Done()
+		fm.fixLoop(childCtx)
+	}()
+	go func() {
+		defer fm.wg.Done()
+		fm.intercutLoop(childCtx)
+	}()
 
 	log.Info().Int("polling_ms", fm.pollingMs).Msg("FixTimeManager 已启动")
 }
@@ -88,6 +96,11 @@ func (fm *FixTimeManager) Stop() {
 	if fm.cancel != nil {
 		fm.cancel()
 	}
+}
+
+// Wait 等待所有轮询 goroutine 退出（优雅关闭时调用）
+func (fm *FixTimeManager) Wait() {
+	fm.wg.Wait()
 }
 
 // Pause 暂停定时检测（手动模式 / 通道保持时调用）

@@ -255,6 +255,30 @@ func (ab *AudioBridge) FadePause(channel int, targetVol float64, fadeMs int) err
 	return ab.Pause(channel, 0)
 }
 
+// Seek 跳转到指定播放位置
+func (ab *AudioBridge) Seek(channel int, positionMs int) error {
+	resp, err := ab.Call(MethodSeek, &SeekParams{Channel: channel, PositionMs: positionMs})
+	if err != nil {
+		return err
+	}
+	if resp.Error != "" {
+		return fmt.Errorf("Seek 失败: %s", resp.Error)
+	}
+	return nil
+}
+
+// SwitchSignal 切换信号源（切换器指令）
+func (ab *AudioBridge) SwitchSignal(signalID int, signalName string) error {
+	resp, err := ab.Call(MethodSwitchSignal, &SwitchSignalParams{SignalID: signalID, SignalName: signalName})
+	if err != nil {
+		return err
+	}
+	if resp.Error != "" {
+		return fmt.Errorf("信号切换失败: %s", resp.Error)
+	}
+	return nil
+}
+
 // Ping 心跳检测
 func (ab *AudioBridge) Ping() error {
 	resp, err := ab.Call(MethodPing, nil)

@@ -33,9 +33,13 @@ type PlayThread struct {
 	audioBridge  *bridge.AudioBridge
 	snapshotMgr  *infra.SnapshotManager
 
-	// Phase 4 新增组件
+	// Phase 4 组件
 	fixTimeMgr *FixTimeManager
 	blankMgr   *BlankManager
+
+	// Phase 5 组件
+	intercutMgr  *IntercutManager
+	channelHold  *ChannelHold
 
 	// 播出状态（mu 保护，多 goroutine 访问）
 	mu          sync.RWMutex
@@ -54,7 +58,7 @@ type PlayThread struct {
 	softFixWaiting atomic.Bool
 	cancelSoftFix  context.CancelFunc
 
-	// 插播状态
+	// 插播状态（双标记：cutPlaying 标志 + IntercutManager 栈深度）
 	cutPlaying atomic.Bool
 
 	// 挂起标志
@@ -62,6 +66,13 @@ type PlayThread struct {
 
 	// EQ 均衡器当前名称
 	currentEQ string
+
+	// 信号切换去重时间戳（对齐 C# _LastSwitchTime）
+	lastSwitchTime atomic.Value
+
+	// 应急插播状态
+	emrgStatus    models.Status
+	emrgReturnPos *models.PlaybackSnapshot
 
 	// goroutine 生命周期跟踪
 	wg sync.WaitGroup
@@ -84,7 +95,6 @@ func NewPlayThread(
 		playNextLock: make(chan struct{}, 1),
 	}
 
-	// 创建 FixTimeManager
 	pt.fixTimeMgr = NewFixTimeManager(
 		eb,
 		cfg.Playback.PollingIntervalMs,
@@ -93,7 +103,6 @@ func NewPlayThread(
 		cfg.Playback.SoftFixAdvanceMs,
 	)
 
-	// 创建 BlankManager
 	pt.blankMgr = NewBlankManager(
 		BlankManagerConfig{
 			EnableAI:      cfg.Padding.EnableAI,
@@ -106,6 +115,17 @@ func NewPlayThread(
 		infra.NewBlankHistory(cfg.Padding.Directory, cfg.Padding.HistoryKeepDays),
 		pt.fixTimeMgr.GetPaddingTimeMs,
 	)
+
+	pt.intercutMgr = NewIntercutManager(eb, cfg.Playback.CutReturnMs)
+
+	pt.channelHold = NewChannelHold(func() {
+		pt.eventBus.StatusChange <- StatusChangeCmd{
+			Target: models.StatusAuto,
+			Reason: "通道保持超时自动返回",
+		}
+	})
+
+	pt.lastSwitchTime.Store(time.Now().Add(-1 * time.Hour))
 
 	return pt
 }
@@ -187,6 +207,26 @@ func (pt *PlayThread) handlePlayFinished(evt PlayFinishedEvent) {
 		ProgramID: pt.currentProgID(),
 	}))
 
+	// 插播中：播完当前素材后继续播插播列表或返回
+	if pt.cutPlaying.Load() && pt.intercutMgr.IsActive() {
+		if pt.intercutMgr.HasMorePrograms() {
+			nextProg := pt.intercutMgr.NextProgram()
+			if nextProg != nil {
+				if err := pt.cueAndPlay(nextProg); err != nil {
+					log.Warn().Err(err).Str("name", nextProg.Name).Msg("插播后续素材失败")
+					pt.returnFromIntercut()
+					return
+				}
+				pt.mu.Lock()
+				pt.currentProg = nextProg
+				pt.mu.Unlock()
+				return
+			}
+		}
+		pt.returnFromIntercut()
+		return
+	}
+
 	// 软定时等待中：当前素材播完即触发切换
 	if pt.softFixWaiting.Load() {
 		pt.softFixWaiting.Store(false)
@@ -200,7 +240,6 @@ func (pt *PlayThread) handlePlayFinished(evt PlayFinishedEvent) {
 	case models.StatusEmergency:
 		pt.playNextEmrgClip()
 	case models.StatusManual:
-		// 手动模式：等待操作员操作
 	}
 }
 
@@ -309,6 +348,13 @@ func (pt *PlayThread) handleFixTimeArrived(evt FixTimeEvent) {
 		DelayMs:  evt.DelayMs,
 	}))
 
+	// 定时到达时清理插播状态（对齐 C# FixTimeArrived 中重置 m_CutPlaying）
+	if pt.cutPlaying.Load() {
+		pt.intercutMgr.ClearOnFixTime()
+		pt.cutPlaying.Store(false)
+		log.Info().Msg("定时到达，插播状态已清除")
+	}
+
 	switch evt.TaskType {
 	case models.TaskHard:
 		pt.executeHardFix(evt)
@@ -318,18 +364,90 @@ func (pt *PlayThread) handleFixTimeArrived(evt FixTimeEvent) {
 }
 
 func (pt *PlayThread) handleIntercutArrived(evt IntercutEvent) {
-	// 插播前检查：1 秒内有定时任务则放弃（对齐 C# IsNearFixTask(1000)）
 	if pt.fixTimeMgr.IsNearFixTask(1000) {
 		log.Info().Str("id", evt.ID).Msg("插播放弃：1 秒内有定时任务")
 		return
 	}
 
+	// 等待 PlayNext 完成
+	for i := 0; i < 50 && pt.inPlayNext.Load(); i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	pt.inFixTime.Store(true)
+	defer pt.inFixTime.Store(false)
+
 	log.Info().Str("id", evt.ID).Str("type", "intercut").Msg("插播任务到达")
-	pt.eventBus.Emit(models.NewBroadcastEvent(models.EventIntercutStarted, models.IntercutArrivedEvent{
-		ID:      evt.ID,
-		Type:    evt.Type,
-		DelayMs: evt.DelayMs,
-	}))
+
+	pt.mu.RLock()
+	prog := pt.currentProg
+	pos := pt.currentPos
+	pl := pt.playlist
+	pt.mu.RUnlock()
+
+	// 保存当前播出状态作为返回快照
+	var returnSnap *models.PlaybackSnapshot
+	if prog != nil {
+		posMs := 0
+		if pt.audioBridge != nil {
+			if result, err := pt.audioBridge.GetPosition(int(models.ChanMainOut)); err == nil && result != nil {
+				posMs = result.PositionMs
+			}
+		}
+		snap := pt.intercutMgr.MakeReturnSnapshot(
+			pos-1, prog.ID, posMs,
+			pt.stateMachine.Status(),
+			prog.SignalID, prog.Volume,
+		)
+
+		// 嵌套插播：如果已在插播中，继承外层返回信息
+		returnSnap = pt.intercutMgr.ResolveNestedReturn(snap)
+	}
+
+	entry := &IntercutEntry{
+		ID:         evt.ID,
+		Type:       evt.Type,
+		Programs:   evt.Programs,
+		ReturnSnap: returnSnap,
+		SectionID:  evt.SectionID,
+	}
+
+	if err := pt.intercutMgr.Push(entry); err != nil {
+		log.Error().Err(err).Str("id", evt.ID).Msg("插播入栈失败")
+		return
+	}
+
+	// 停止垫乐
+	pt.setPaddingPlay(false)
+
+	// 播出插播的第一条素材
+	nextProg := pt.intercutMgr.NextProgram()
+	if nextProg == nil {
+		log.Warn().Str("id", evt.ID).Msg("插播素材为空")
+		pt.intercutMgr.Pop()
+		return
+	}
+
+	if err := pt.cueAndPlay(nextProg); err != nil {
+		log.Error().Err(err).Str("name", nextProg.Name).Msg("插播素材预卷失败")
+		pt.intercutMgr.Pop()
+		return
+	}
+
+	// 设置插播双标记
+	pt.cutPlaying.Store(true)
+	pt.mu.Lock()
+	pt.currentProg = nextProg
+	pt.mu.Unlock()
+
+	// 标记被插播节目状态
+	if prog != nil && pl != nil {
+		pt.eventBus.Emit(models.NewBroadcastEvent(models.EventIntercutStarted, models.IntercutStartedEvent{
+			ID:              evt.ID,
+			Type:            evt.Type,
+			Depth:           pt.intercutMgr.Depth(),
+			InterruptedProg: prog.ID,
+		}))
+	}
 }
 
 // --- PlayNextClip 决策树 ---
@@ -422,10 +540,92 @@ func (pt *PlayThread) playNextClip(force bool) bool {
 	return false
 }
 
+// returnFromIntercut 插播结束，恢复到被插播位置
+func (pt *PlayThread) returnFromIntercut() {
+	snap := pt.intercutMgr.Pop()
+	pt.cutPlaying.Store(pt.intercutMgr.IsActive())
+
+	if snap == nil {
+		log.Info().Msg("插播结束，无返回快照，继续播出下一条")
+		pt.playNextClip(false)
+		return
+	}
+
+	log.Info().
+		Str("program_id", snap.ProgramID).
+		Int("position_ms", snap.PositionMs).
+		Bool("cut_return", snap.IsCutReturn).
+		Msg("插播结束，恢复到被插播位置")
+
+	pt.eventBus.Emit(models.NewBroadcastEvent(models.EventIntercutEnded, models.IntercutEndedEvent{
+		ReturnProg:  snap.ProgramID,
+		ReturnPosMs: snap.PositionMs,
+	}))
+
+	// 恢复播出位置
+	pt.mu.Lock()
+	if pt.playlist != nil && snap.ProgramIndex >= 0 && snap.ProgramIndex < pt.playlist.Len() {
+		pt.currentPos = snap.ProgramIndex
+		prog := pt.playlist.FlatList[snap.ProgramIndex]
+		pt.mu.Unlock()
+
+		if err := pt.cueAndPlayAt(prog, snap.PositionMs); err != nil {
+			log.Warn().Err(err).Msg("恢复被插播节目失败，播下一条")
+			pt.playNextClip(true)
+			return
+		}
+		pt.mu.Lock()
+		pt.currentProg = prog
+		pt.currentPos = snap.ProgramIndex + 1
+		pt.mu.Unlock()
+	} else {
+		pt.mu.Unlock()
+		pt.playNextClip(false)
+	}
+}
+
+// cueAndPlayAt 预卷并从指定位置播出（用于插播返回）
+func (pt *PlayThread) cueAndPlayAt(program *models.Program, positionMs int) error {
+	maxRetry := pt.cfg.Playback.CueRetryMax
+
+	for attempt := 0; attempt <= maxRetry; attempt++ {
+		if attempt > 0 {
+			time.Sleep(200 * time.Millisecond)
+		}
+
+		err := pt.audioBridge.Load(
+			int(models.ChanMainOut),
+			program.FilePath,
+			program.IsEncrypt,
+			program.Volume,
+			program.FadeIn,
+		)
+		if err != nil {
+			log.Warn().Err(err).Str("name", program.Name).Int("attempt", attempt).Msg("预卷失败")
+			continue
+		}
+
+		if positionMs > 0 {
+			if err := pt.audioBridge.Seek(int(models.ChanMainOut), positionMs); err != nil {
+				log.Warn().Err(err).Int("pos_ms", positionMs).Msg("Seek 失败，从头播放")
+			}
+		}
+
+		if err := pt.audioBridge.Play(int(models.ChanMainOut), true); err != nil {
+			log.Warn().Err(err).Str("name", program.Name).Msg("播出失败")
+			return err
+		}
+		return nil
+	}
+
+	return &CueError{Name: program.Name, Reason: "重试耗尽", Attempt: maxRetry}
+}
+
 // playNextEmrgClip Emergency 模式的独立播放方法（对齐 C# PlayNextEmrgClip）
 func (pt *PlayThread) playNextEmrgClip() {
 	log.Debug().Msg("Emergency 模式播出下一条")
-	// Phase 5 实现完整的应急播出编排
+	// 应急模式下播出下一条素材（由外部通过 EmrgCutStart 设置的播表控制）
+	pt.playNextClip(true)
 }
 
 // cueAndPlay 预卷 + 播出（含重试）
@@ -587,6 +787,23 @@ func (pt *PlayThread) onEnterAuto() {
 func (pt *PlayThread) onReturnAuto() {
 	log.Info().Msg("返回自动播出模式")
 
+	// 通道保持返回处理
+	if pt.channelHold.IsManualCancel() {
+		log.Info().Msg("通道保持手动取消，重新初始化定时任务")
+		pt.mu.RLock()
+		pl := pt.playlist
+		pt.mu.RUnlock()
+		if pl != nil {
+			pt.fixTimeMgr.InitFromPlaylist(pl, pl.Date)
+			pt.fixTimeMgr.Start()
+		}
+		return
+	}
+
+	// 停止垫乐和当前播出
+	pt.setPaddingPlay(false)
+	pt.fadePause(pt.cfg.Audio.FadeOutMs)
+
 	pt.mu.RLock()
 	pl := pt.playlist
 	prog := pt.currentProg
@@ -611,6 +828,9 @@ func (pt *PlayThread) stopPlayback() {
 	pt.fixTimeMgr.Pause()
 	pt.blankMgr.Stop()
 	pt.softFixWaiting.Store(false)
+	pt.cutPlaying.Store(false)
+	pt.intercutMgr.Reset()
+	pt.channelHold.Reset()
 
 	if pt.audioBridge != nil {
 		_ = pt.audioBridge.Stop(int(models.ChanMainOut), pt.cfg.Audio.FadeOutMs)
@@ -630,6 +850,7 @@ func (pt *PlayThread) enterLiveMode() {
 func (pt *PlayThread) enterDelayMode() {
 	log.Info().Msg("进入延时转播模式")
 	pt.fixTimeMgr.Pause()
+	// 通道保持由 DelayStart 外部接口触发 channelHold.Start
 }
 
 func (pt *PlayThread) enterEmergencyMode() {
@@ -707,6 +928,34 @@ func (pt *PlayThread) saveSnapshot() {
 	}
 }
 
+// --- 信号切换 ---
+
+// switchSignal 切换信号源（含去重防抖）。
+// 对齐 C# _LastSwitchTime 防抖：500ms 内重复切换同一信号则跳过。
+func (pt *PlayThread) switchSignal(signalID int, signalName string) {
+	lastSwitch := pt.lastSwitchTime.Load().(time.Time)
+	if time.Since(lastSwitch) < time.Duration(pt.cfg.Playback.SignalSwitchDelayMs)*time.Millisecond {
+		log.Debug().
+			Int("signal_id", signalID).
+			Str("signal_name", signalName).
+			Msg("信号切换跳过：防抖窗口内")
+		return
+	}
+
+	pt.lastSwitchTime.Store(time.Now())
+
+	log.Info().
+		Int("signal_id", signalID).
+		Str("signal_name", signalName).
+		Msg("信号切换")
+
+	if pt.audioBridge != nil {
+		if err := pt.audioBridge.SwitchSignal(signalID, signalName); err != nil {
+			log.Error().Err(err).Int("signal_id", signalID).Msg("信号切换失败")
+		}
+	}
+}
+
 // --- 外部控制接口 ---
 
 // ChangeStatus 请求状态变更（API/UDP 调用），带 5s 超时保护
@@ -780,4 +1029,140 @@ func (pt *PlayThread) StartBlank() {
 // StopBlank 手动停止垫乐
 func (pt *PlayThread) StopBlank() {
 	pt.setPaddingPlay(false)
+}
+
+// IntercutMgr 返回插播管理器
+func (pt *PlayThread) IntercutMgr() *IntercutManager {
+	return pt.intercutMgr
+}
+
+// ChannelHoldMgr 返回通道保持管理器
+func (pt *PlayThread) ChannelHoldMgr() *ChannelHold {
+	return pt.channelHold
+}
+
+// DelayStart 外部启动通道保持（对齐 C# DelayStart）。
+// 调用后系统进入 RedifDelay 状态，到期自动返回 Auto。
+func (pt *PlayThread) DelayStart(data *ChannelHoldData) error {
+	status := pt.stateMachine.Status()
+	if status == models.StatusStopped {
+		return fmt.Errorf("播出已停止，无法启动通道保持")
+	}
+	if status == models.StatusEmergency {
+		return fmt.Errorf("紧急插播时无法启动通道保持")
+	}
+
+	if data.ReturnTime.Before(time.Now()) {
+		return fmt.Errorf("返回时间已过期: %s", data.ReturnTime.Format("15:04:05"))
+	}
+
+	pt.mu.RLock()
+	prog := pt.currentProg
+	pt.mu.RUnlock()
+
+	// 保存当前状态用于返回
+	pt.emrgStatus = status
+	if prog != nil {
+		posMs := 0
+		if pt.audioBridge != nil {
+			if result, err := pt.audioBridge.GetPosition(int(models.ChanMainOut)); err == nil && result != nil {
+				posMs = result.PositionMs
+			}
+		}
+		pt.emrgReturnPos = pt.intercutMgr.MakeReturnSnapshot(
+			pt.CurrentPosition()-1, prog.ID, posMs, status, prog.SignalID, prog.Volume,
+		)
+	}
+
+	if err := pt.channelHold.Start(data); err != nil {
+		return fmt.Errorf("通道保持启动失败: %w", err)
+	}
+
+	// 切换信号
+	if data.SignalID > 0 {
+		pt.switchSignal(data.SignalID, data.SignalName)
+	}
+
+	// 请求状态迁移到 RedifDelay
+	if err := pt.ChangeStatus(models.StatusRedifDelay, "通道保持"); err != nil {
+		pt.channelHold.Stop()
+		return fmt.Errorf("状态迁移失败: %w", err)
+	}
+
+	pt.eventBus.Emit(models.NewBroadcastEvent(models.EventType("channel_hold_started"), models.ChannelHoldEvent{
+		SignalID:    data.SignalID,
+		SignalName:  data.SignalName,
+		DurationMs:  data.DurationMs,
+		ProgramName: data.ProgramName,
+		IsAIDelay:   data.IsAIDelay,
+	}))
+
+	log.Info().
+		Int("signal_id", data.SignalID).
+		Int("duration_ms", data.DurationMs).
+		Str("program_name", data.ProgramName).
+		Msg("通道保持已启动")
+
+	return nil
+}
+
+// DelayCancelManual 手动取消通道保持
+func (pt *PlayThread) DelayCancelManual() error {
+	if !pt.channelHold.IsActive() {
+		return fmt.Errorf("当前不在通道保持中")
+	}
+
+	pt.channelHold.Stop()
+
+	return pt.ChangeStatus(models.StatusAuto, "手动取消通道保持")
+}
+
+// EmrgCutStart 紧急插播开始（对齐 C# EmrgCutStart）
+func (pt *PlayThread) EmrgCutStart(signalID int, signalName string) error {
+	status := pt.stateMachine.Status()
+	if status == models.StatusStopped {
+		return fmt.Errorf("播出已停止，无法启动紧急插播")
+	}
+
+	pt.mu.RLock()
+	prog := pt.currentProg
+	pt.mu.RUnlock()
+
+	// 保存被插播状态
+	pt.emrgStatus = status
+	if prog != nil {
+		posMs := 0
+		if pt.audioBridge != nil {
+			if result, err := pt.audioBridge.GetPosition(int(models.ChanMainOut)); err == nil && result != nil {
+				posMs = result.PositionMs
+			}
+		}
+		pt.emrgReturnPos = pt.intercutMgr.MakeReturnSnapshot(
+			pt.CurrentPosition()-1, prog.ID, posMs, status, prog.SignalID, prog.Volume,
+		)
+	}
+
+	// 切换到紧急信号
+	pt.switchSignal(signalID, signalName)
+
+	// 暂停当前播放
+	if pt.audioBridge != nil {
+		_ = pt.audioBridge.FadePause(int(models.ChanMainOut), 0, pt.cfg.Audio.FadeOutMs)
+	}
+
+	return pt.ChangeStatus(models.StatusEmergency, fmt.Sprintf("紧急插播: %s", signalName))
+}
+
+// EmrgCutStop 紧急插播结束，返回自动播出（对齐 C# EmrgCutStop）
+func (pt *PlayThread) EmrgCutStop() error {
+	if pt.stateMachine.Status() != models.StatusEmergency {
+		return fmt.Errorf("当前不在紧急插播状态")
+	}
+
+	return pt.ChangeStatus(models.StatusAuto, "紧急插播结束")
+}
+
+// IsCutPlaying 判断是否正在插播
+func (pt *PlayThread) IsCutPlaying() bool {
+	return pt.cutPlaying.Load()
 }

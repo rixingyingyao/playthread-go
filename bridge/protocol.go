@@ -46,6 +46,8 @@ const (
 	MethodRemoveSync   = "remove_sync"   // 移除同步回调
 	MethodFreeChannel  = "free_channel"  // 释放通道
 	MethodFreeAll      = "free_all"      // 释放所有通道
+	MethodSeek         = "seek"          // Seek 到指定位置
+	MethodSwitchSignal = "switch_signal" // 切换信号源
 	MethodShutdown     = "shutdown"      // 关闭子进程
 	MethodPing         = "ping"          // 心跳检测
 )
@@ -155,4 +157,16 @@ type EQBand struct {
 	Center    float64 `json:"center"`    // 中心频率（Hz）
 	Bandwidth float64 `json:"bandwidth"` // 带宽
 	Gain      float64 `json:"gain"`      // 增益（dB）
+}
+
+// SeekParams Seek 参数
+type SeekParams struct {
+	Channel    int `json:"channel"`     // 通道索引
+	PositionMs int `json:"position_ms"` // 目标位置(ms)
+}
+
+// SwitchSignalParams 信号切换参数
+type SwitchSignalParams struct {
+	SignalID   int    `json:"signal_id"`   // 信号源 ID
+	SignalName string `json:"signal_name"` // 信号源名称
 }

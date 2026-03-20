@@ -91,7 +91,14 @@ type FixTimeEvent struct {
 
 // IntercutEvent 插播到达事件
 type IntercutEvent struct {
-	ID      string
-	Type    models.IntercutType
-	DelayMs int
+	ID        string
+	Type      models.IntercutType
+	DelayMs   int
+	SectionID string              // 所属栏目 ArrangeID
+	Programs  []*models.Program   // 插播素材列表
+}
+
+// ChannelHoldReturnEvent 通道保持返回事件
+type ChannelHoldReturnEvent struct {
+	ManualCancel bool
 }
