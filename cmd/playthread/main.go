@@ -21,6 +21,7 @@ import (
 	"github.com/rixingyingyao/playthread-go/db"
 	"github.com/rixingyingyao/playthread-go/infra"
 	"github.com/rixingyingyao/playthread-go/infra/platform"
+	"github.com/rixingyingyao/playthread-go/models"
 	"github.com/rs/zerolog/log"
 )
 
@@ -45,7 +46,46 @@ func main() {
 	}
 	defer platform.ReleaseSingletonLock(lockHandle)
 
-	cfg, err := infra.LoadConfig(*configPath)
+	// 检测是否以 Windows 服务模式运行
+	interactive, err := platform.IsInteractiveSession()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "检测运行模式失败: %v\n", err)
+		interactive = true // 回退到控制台模式
+	}
+
+	if !interactive {
+		// Windows 服务模式：由 SCM 管理生命周期
+		cfgPath := *configPath
+		if svcErr := platform.RunAsService("PlaythreadGo", func(ctx context.Context) {
+			runApp(ctx, cfgPath)
+		}); svcErr != nil {
+			fmt.Fprintf(os.Stderr, "Windows 服务运行失败: %v\n", svcErr)
+			os.Exit(1)
+		}
+		return
+	}
+
+	// 控制台模式：信号驱动生命周期
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go runApp(ctx, *configPath)
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	sig := <-sigCh
+	log.Info().Str("signal", sig.String()).Msg("收到退出信号，开始优雅关闭")
+	cancel()
+
+	// 等待 runApp 中的组件退出
+	time.Sleep(2 * time.Second)
+	log.Info().Msg("Playthread 主控进程退出")
+}
+
+// runApp 实际业务逻辑入口，ctx 取消时优雅退出
+func runApp(ctx context.Context, configPath string) {
+	cfg, err := infra.LoadConfig(configPath)
 	if err != nil {
 		cfg = infra.DefaultConfig()
 		log.Warn().Err(err).Msg("加载配置文件失败，使用默认配置")
@@ -62,9 +102,6 @@ func main() {
 	defer platform.RestoreTimer()
 
 	log.Info().Str("version", Version).Msg("Playthread 主控进程启动")
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	database, err := db.Open(cfg.DB.Path)
 	if err != nil {
@@ -111,27 +148,50 @@ func main() {
 	monitor := infra.NewMonitor(&cfg.Monitor, "data")
 	go monitor.Run(ctx)
 
+	// 数据源管理器（云端/中心双数据源 + 心跳降级）
+	dsMgr := infra.NewDataSourceManager(cfg.DataSource)
+	dsMgr.OnDegrade(func(from, to infra.SourceType) {
+		log.Warn().Str("from", string(from)).Str("to", string(to)).Msg("数据源降级切换")
+	})
+	dsMgr.OnHeartbeat(func(src infra.SourceType, ok bool) {
+		log.Debug().Str("source", string(src)).Bool("ok", ok).Msg("数据源心跳")
+	})
+	go dsMgr.Run(ctx)
+
+	// 素材文件缓存
+	fileCache := infra.NewFileCache(cfg.FileCache)
+
+	// 断网暂存
+	offlineStore := infra.NewOfflineStore(cfg.Offline)
+	go offlineStore.RunFlush(ctx)
+
+	// 自升级管理器
+	updater := infra.NewUpdater(Version)
+
 	// 核心编排器
 	sm := core.NewStateMachine()
 	eb := core.NewEventBus()
 	pt := core.NewPlayThread(cfg, sm, eb, pm.Bridge(), snapshotMgr)
+
+	// 播单接收回调：数据源 → PlayThread
+	dsMgr.OnPlaylist(func(pl *models.Playlist) {
+		log.Info().Str("id", pl.ID).Msg("从数据源收到新播单")
+		pt.SetPlaylist(pl)
+	})
+
 	pt.Run(ctx)
 
 	// API 服务（HTTP + WebSocket + UDP）
 	apiSrv := api.NewServer(cfg, pt)
+	apiSrv.SetInfra(dsMgr, fileCache, offlineStore, updater, monitor)
 	go func() {
 		if err := apiSrv.Start(ctx); err != nil {
 			log.Error().Err(err).Msg("API 服务异常退出")
 		}
 	}()
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	sig := <-sigCh
-	log.Info().Str("signal", sig.String()).Msg("收到退出信号，开始优雅关闭")
-
-	cancel()
+	// 等待 ctx 取消（由 main 或 Windows Service 触发）
+	<-ctx.Done()
 	pt.Wait()
-	log.Info().Msg("Playthread 主控进程退出")
+	log.Info().Msg("Playthread 业务逻辑已退出")
 }

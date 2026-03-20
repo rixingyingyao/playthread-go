@@ -21,6 +21,13 @@ type Server struct {
 	router  chi.Router
 	httpSrv *http.Server
 	udp     *UDPListener
+
+	// 基础设施组件（Phase 7/8 接入）
+	dsMgr     *infra.DataSourceManager
+	fileCache *infra.FileCache
+	offline   *infra.OfflineStore
+	updater   *infra.Updater
+	monitor   *infra.Monitor
 }
 
 // NewServer 创建 API 服务器
@@ -104,6 +111,13 @@ func (s *Server) buildRouter(cfg *infra.ServerConfig) chi.Router {
 		r.Handle("/threadcreate", pprof.Handler("threadcreate"))
 	})
 
+	// 基础设施诊断端点
+	r.Route("/api/v1/infra", func(r chi.Router) {
+		r.Get("/datasource", s.handleGetDatasource)
+		r.Get("/monitor", s.handleGetMonitor)
+		r.Post("/update", s.handleTriggerUpdate)
+	})
+
 	return r
 }
 
@@ -154,4 +168,13 @@ func (s *Server) Start(ctx context.Context) error {
 // Hub 返回 WebSocket Hub（测试用）
 func (s *Server) Hub() *WSHub {
 	return s.hub
+}
+
+// SetInfra 注入基础设施组件（数据源/缓存/断网暂存/升级/监控）
+func (s *Server) SetInfra(ds *infra.DataSourceManager, fc *infra.FileCache, off *infra.OfflineStore, upd *infra.Updater, mon *infra.Monitor) {
+	s.dsMgr = ds
+	s.fileCache = fc
+	s.offline = off
+	s.updater = upd
+	s.monitor = mon
 }

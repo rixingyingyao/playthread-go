@@ -62,12 +62,3 @@ func ReleaseSingletonLock(handle syscall.Handle) {
 
 // ErrAlreadyRunning 表示已有实例在运行
 var ErrAlreadyRunning = fmt.Errorf("已有实例在运行")
-
-// IsWindowsService 检查当前进程是否作为 Windows 服务运行。
-// 通过检查父进程是否为 services.exe 来判断（简化判断）。
-func IsWindowsService() bool {
-	// 如果 stdin 不是终端（不是控制台），很可能是服务
-	// 这是一个简化判断，golang.org/x/sys/windows/svc 有更精确的方法
-	// 但我们避免引入额外依赖
-	return false // 默认控制台模式，用户通过 NSSM 注册服务时无需代码感知
-}

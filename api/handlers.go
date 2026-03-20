@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/rixingyingyao/playthread-go/core"
+	"github.com/rixingyingyao/playthread-go/infra"
 	"github.com/rixingyingyao/playthread-go/models"
 )
 
@@ -341,3 +342,45 @@ func parseStatus(s string) (models.Status, error) {
 		return 0, fmt.Errorf("未知状态: %s（可选: stopped/auto/manual/live/redifdelay/emergency）", s)
 	}
 }
+
+// --- 基础设施端点 ---
+
+// handleGetDatasource 获取数据源状态
+func (s *Server) handleGetDatasource(w http.ResponseWriter, r *http.Request) {
+	if s.dsMgr == nil {
+		writeErr(w, http.StatusServiceUnavailable, "数据源管理器未初始化")
+		return
+	}
+	writeOK(w, s.dsMgr.StatusSnapshot())
+}
+
+// handleGetMonitor 获取运行时监控指标
+func (s *Server) handleGetMonitor(w http.ResponseWriter, r *http.Request) {
+	if s.monitor == nil {
+		writeErr(w, http.StatusServiceUnavailable, "监控器未初始化")
+		return
+	}
+	data := map[string]interface{}{
+		"metrics":      s.monitor.Metrics(),
+		"crash_stats":  s.monitor.CrashStats(),
+	}
+	writeOK(w, data)
+}
+
+// handleTriggerUpdate 触发自升级
+func (s *Server) handleTriggerUpdate(w http.ResponseWriter, r *http.Request) {
+	if s.updater == nil {
+		writeErr(w, http.StatusServiceUnavailable, "升级管理器未初始化")
+		return
+	}
+
+	var info infra.UpdateInfo
+	if err := json.NewDecoder(r.Body).Decode(&info); err != nil {
+		writeErr(w, http.StatusBadRequest, "请求体解析失败: "+err.Error())
+		return
+	}
+
+	result := s.updater.Apply(r.Context(), &info)
+	writeOK(w, result)
+}
+
