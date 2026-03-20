@@ -1072,25 +1072,29 @@ func (pt *PlayThread) Next() bool {
 }
 
 // Suspend 挂起播出：暂停当前主通道音频 + 阻止自动推进
-func (pt *PlayThread) Suspend() {
+func (pt *PlayThread) Suspend() error {
 	pt.suspended.Store(true)
 	if pt.audioBridge != nil {
 		if err := pt.audioBridge.Pause(int(models.ChanMainOut), pt.cfg.Audio.FadeOutMs); err != nil {
-			log.Warn().Err(err).Msg("暂停音频失败，仅挂起推进")
+			log.Warn().Err(err).Msg("暂停音频失败")
+			return fmt.Errorf("暂停音频失败: %w", err)
 		}
 	}
 	log.Info().Msg("播出已暂停")
+	return nil
 }
 
 // Resume 恢复播出：恢复主通道音频 + 允许自动推进
-func (pt *PlayThread) Resume() {
+func (pt *PlayThread) Resume() error {
 	pt.suspended.Store(false)
 	if pt.audioBridge != nil {
 		if err := pt.audioBridge.Resume(int(models.ChanMainOut)); err != nil {
-			log.Warn().Err(err).Msg("恢复音频失败，仅恢复推进")
+			log.Warn().Err(err).Msg("恢复音频失败")
+			return fmt.Errorf("恢复音频失败: %w", err)
 		}
 	}
 	log.Info().Msg("播出已恢复")
+	return nil
 }
 
 // CurrentProgram 获取当前正在播出的素材（线程安全）

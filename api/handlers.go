@@ -105,13 +105,19 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 确保取消挂起状态，否则 pause 后再 play 不会恢复推进
-	s.pt.Resume()
+	if err := s.pt.Resume(); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeOK(w, nil)
 }
 
 // handlePause POST /api/v1/control/pause
 func (s *Server) handlePause(w http.ResponseWriter, r *http.Request) {
-	s.pt.Suspend()
+	if err := s.pt.Suspend(); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	writeOK(w, nil)
 }
 

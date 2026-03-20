@@ -184,6 +184,12 @@ func (rl *RateLimiter) Handler(next http.Handler) http.Handler {
 
 		lim, ok := rl.clients[ip]
 		if !ok || now.Sub(lim.windowAt) >= time.Second {
+			// 新 IP 或窗口已过：如果表已满且清理后仍满，拒绝
+			if !ok && len(rl.clients) >= rateLimiterMaxEntries {
+				rl.mu.Unlock()
+				http.Error(w, `{"code":429,"message":"too many clients"}`, http.StatusTooManyRequests)
+				return
+			}
 			rl.clients[ip] = &ipLimiter{count: 1, windowAt: now}
 			rl.mu.Unlock()
 			next.ServeHTTP(w, r)
