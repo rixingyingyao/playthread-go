@@ -319,7 +319,11 @@ func (s *IPCServer) handleDeviceInfo(req *bridge.IPCRequest) *bridge.IPCResponse
 func (s *IPCServer) success(id string, data interface{}) *bridge.IPCResponse {
 	resp := &bridge.IPCResponse{ID: id}
 	if data != nil {
-		raw, _ := json.Marshal(data)
+		raw, err := json.Marshal(data)
+		if err != nil {
+			log.Error().Err(err).Str("id", id).Msg("序列化响应数据失败")
+			return s.fail(id, fmt.Sprintf("序列化响应失败: %v", err))
+		}
 		resp.Data = raw
 	}
 	return resp
@@ -353,7 +357,11 @@ func (s *IPCServer) PushEvent(event string, data interface{}) {
 		Time:  time.Now(),
 	}
 	if data != nil {
-		raw, _ := json.Marshal(data)
+		raw, err := json.Marshal(data)
+		if err != nil {
+			log.Error().Err(err).Str("event", event).Msg("序列化事件数据失败")
+			return
+		}
 		evt.Data = raw
 	}
 

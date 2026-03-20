@@ -20,6 +20,7 @@ type AudioBridge struct {
 	eventCh  chan *IPCEvent // 子进程推送的异步事件
 	timeout  time.Duration // 请求超时
 	closedCh chan struct{}  // readLoop 退出后关闭，通知所有等待者
+	wg       sync.WaitGroup // 追踪 readLoop goroutine
 }
 
 // NewAudioBridge 创建音频桥接客户端
@@ -30,8 +31,17 @@ func NewAudioBridge(stdin io.Writer, stdout io.Reader, timeout time.Duration) *A
 		timeout:  timeout,
 		closedCh: make(chan struct{}),
 	}
-	go ab.readLoop(stdout)
+	ab.wg.Add(1)
+	go func() {
+		defer ab.wg.Done()
+		ab.readLoop(stdout)
+	}()
 	return ab
+}
+
+// Wait 等待 readLoop goroutine 退出
+func (ab *AudioBridge) Wait() {
+	ab.wg.Wait()
 }
 
 // EventCh 返回事件通道，外部通过此通道接收子进程推送的异步事件

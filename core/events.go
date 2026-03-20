@@ -18,8 +18,8 @@ type EventBus struct {
 	BlankFinished chan struct{}         // 垫乐播完（垫乐通道 → BlankManager）
 	Broadcast     chan models.BroadcastEvent // 向外推送（core → api/ws）
 
-	subscribers []Subscriber
-	mu          sync.RWMutex
+	subChans []chan models.BroadcastEvent // 每个订阅者一个独立 channel
+	mu       sync.RWMutex
 }
 
 // Subscriber 事件订阅者接口
@@ -40,11 +40,21 @@ func NewEventBus() *EventBus {
 	}
 }
 
-// Subscribe 注册广播事件订阅者
+// Subscribe 注册广播事件订阅者。
+// 内部为每个订阅者创建独立 buffered channel + 消费 goroutine，
+// 避免 Emit 时为每个订阅者 spawn goroutine 导致长期运行 goroutine 泄漏。
 func (eb *EventBus) Subscribe(sub Subscriber) {
+	ch := make(chan models.BroadcastEvent, 64)
+
 	eb.mu.Lock()
-	defer eb.mu.Unlock()
-	eb.subscribers = append(eb.subscribers, sub)
+	eb.subChans = append(eb.subChans, ch)
+	eb.mu.Unlock()
+
+	go func() {
+		for event := range ch {
+			sub.OnBroadcast(event)
+		}
+	}()
 }
 
 // Emit 发送广播事件
@@ -57,8 +67,12 @@ func (eb *EventBus) Emit(event models.BroadcastEvent) {
 
 	eb.mu.RLock()
 	defer eb.mu.RUnlock()
-	for _, sub := range eb.subscribers {
-		go sub.OnBroadcast(event)
+	for _, ch := range eb.subChans {
+		select {
+		case ch <- event:
+		default:
+			log.Warn().Str("type", string(event.Type)).Msg("订阅者事件丢弃：channel 满")
+		}
 	}
 }
 

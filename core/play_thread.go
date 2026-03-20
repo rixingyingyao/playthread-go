@@ -64,6 +64,9 @@ type PlayThread struct {
 	// 挂起标志
 	suspended atomic.Bool
 
+	// 上下文（Run 时设置，用于取消 time.Sleep 等阻塞操作）
+	ctx context.Context
+
 	// EQ 均衡器当前名称
 	currentEQ string
 
@@ -142,6 +145,7 @@ func (pt *PlayThread) SetPlaylist(pl *models.Playlist) {
 
 // Run 启动播出编排器（启动两个事件循环 goroutine + 定时管理器）
 func (pt *PlayThread) Run(ctx context.Context) {
+	pt.ctx = ctx
 	pt.wg.Add(3)
 	go func() {
 		defer pt.wg.Done()
@@ -330,8 +334,8 @@ func (pt *PlayThread) handleChannelEmpty(evt ChannelEmptyEvent) {
 
 func (pt *PlayThread) handleFixTimeArrived(evt FixTimeEvent) {
 	// 等待 PlayNext 完成，最多 500ms（对齐 C# 50×10ms 循环）
-	for i := 0; i < 50 && pt.inPlayNext.Load(); i++ {
-		time.Sleep(10 * time.Millisecond)
+	if !pt.waitPlayNextDone() {
+		return
 	}
 	pt.inFixTime.Store(true)
 	defer pt.inFixTime.Store(false)
@@ -377,8 +381,8 @@ func (pt *PlayThread) handleIntercutArrived(evt IntercutEvent) {
 	}
 
 	// 等待 PlayNext 完成
-	for i := 0; i < 50 && pt.inPlayNext.Load(); i++ {
-		time.Sleep(10 * time.Millisecond)
+	if !pt.waitPlayNextDone() {
+		return
 	}
 	pt.inFixTime.Store(true)
 	defer pt.inFixTime.Store(false)
@@ -597,7 +601,11 @@ func (pt *PlayThread) cueAndPlayAt(program *models.Program, positionMs int) erro
 
 	for attempt := 0; attempt <= maxRetry; attempt++ {
 		if attempt > 0 {
-			time.Sleep(200 * time.Millisecond)
+			select {
+			case <-time.After(200 * time.Millisecond):
+			case <-pt.ctx.Done():
+				return pt.ctx.Err()
+			}
 		}
 
 		err := pt.audioBridge.Load(
@@ -641,7 +649,11 @@ func (pt *PlayThread) cueAndPlay(program *models.Program) error {
 
 	for attempt := 0; attempt <= maxRetry; attempt++ {
 		if attempt > 0 {
-			time.Sleep(200 * time.Millisecond)
+			select {
+			case <-time.After(200 * time.Millisecond):
+			case <-pt.ctx.Done():
+				return pt.ctx.Err()
+			}
 			log.Debug().Int("attempt", attempt).Str("name", program.Name).Msg("预卷重试")
 		}
 
@@ -743,6 +755,19 @@ func (pt *PlayThread) fadePause(fadeOutMs int) {
 
 // --- 辅助方法 ---
 
+// waitPlayNextDone 等待 PlayNext 完成，最多 500ms（对齐 C# 50×10ms 循环）。
+// 返回 true 表示等待完成，false 表示 ctx 已取消。
+func (pt *PlayThread) waitPlayNextDone() bool {
+	for i := 0; i < 50 && pt.inPlayNext.Load(); i++ {
+		select {
+		case <-time.After(10 * time.Millisecond):
+		case <-pt.ctx.Done():
+			return false
+		}
+	}
+	return true
+}
+
 func (pt *PlayThread) executeHardFix(evt FixTimeEvent) {
 	// 停止垫乐
 	if pt.blankMgr.IsPlaying() {
@@ -756,7 +781,11 @@ func (pt *PlayThread) executeHardFix(evt FixTimeEvent) {
 
 	// 等待淡出完成
 	if evt.DelayMs > 0 {
-		time.Sleep(time.Duration(evt.DelayMs) * time.Millisecond)
+		select {
+		case <-time.After(time.Duration(evt.DelayMs) * time.Millisecond):
+		case <-pt.ctx.Done():
+			return
+		}
 	}
 
 	pt.playNextClip(true)
@@ -773,7 +802,7 @@ func (pt *PlayThread) executeSoftFix(evt FixTimeEvent) {
 	// 设置等待标志和取消句柄。当 playbackLoop 中 handlePlayFinished 检测到
 	// softFixWaiting=true 时，会清标志并调用 playNextClip(true) 执行定时切换。
 	// cancelSoftFix 可被 CancelSoftFix() 或 executeHardFix() 调用以取消等待。
-	_, cancel := context.WithCancel(context.Background())
+	_, cancel := context.WithCancel(pt.ctx)
 	pt.cancelSoftFix = cancel
 	pt.softFixWaiting.Store(true)
 

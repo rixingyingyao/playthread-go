@@ -24,6 +24,7 @@ type ProcessManager struct {
 	onEvent     func(*IPCEvent) // 事件回调
 	waitDone    chan error     // cmd.Wait() 结果通知
 	stopping    bool          // 是否正在主动停止
+	wg          sync.WaitGroup // 追踪辅助 goroutine（drainStderr, forwardEvents, watchProcess）
 }
 
 // NewProcessManager 创建子进程管理器
@@ -93,9 +94,20 @@ func (pm *ProcessManager) startLocked(ctx context.Context) error {
 		pm.waitDone <- cmd.Wait()
 	}()
 
-	go pm.drainStderr(stderr)
-	go pm.forwardEvents(childCtx)
-	go pm.watchProcess(ctx)
+	// 辅助 goroutine（drainStderr, forwardEvents, watchProcess）由 WaitGroup 追踪
+	pm.wg.Add(3)
+	go func() {
+		defer pm.wg.Done()
+		pm.drainStderr(stderr)
+	}()
+	go func() {
+		defer pm.wg.Done()
+		pm.forwardEvents(childCtx)
+	}()
+	go func() {
+		defer pm.wg.Done()
+		pm.watchProcess(ctx)
+	}()
 
 	log.Info().Str("path", pm.exePath).Int("pid", cmd.Process.Pid).Msg("播放服务子进程已启动")
 	return nil
@@ -126,6 +138,9 @@ func (pm *ProcessManager) Stop() {
 			<-waitDone
 		}
 	}
+
+	// 等待所有辅助 goroutine 退出
+	pm.wg.Wait()
 
 	pm.mu.Lock()
 	pm.bridge = nil
