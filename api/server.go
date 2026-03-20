@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/pprof"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -87,6 +88,21 @@ func (s *Server) buildRouter(cfg *infra.ServerConfig) chi.Router {
 		wsPath = "/ws/playback"
 	}
 	r.Get(wsPath, s.hub.ServeWS)
+
+	// pprof 调试端点
+	r.Route("/debug/pprof", func(r chi.Router) {
+		r.Get("/", pprof.Index)
+		r.Get("/cmdline", pprof.Cmdline)
+		r.Get("/profile", pprof.Profile)
+		r.Get("/symbol", pprof.Symbol)
+		r.Get("/trace", pprof.Trace)
+		r.Handle("/goroutine", pprof.Handler("goroutine"))
+		r.Handle("/heap", pprof.Handler("heap"))
+		r.Handle("/allocs", pprof.Handler("allocs"))
+		r.Handle("/block", pprof.Handler("block"))
+		r.Handle("/mutex", pprof.Handler("mutex"))
+		r.Handle("/threadcreate", pprof.Handler("threadcreate"))
+	})
 
 	return r
 }

@@ -1,0 +1,28 @@
+[Unit]
+Description=Playthread 广播播出主控进程
+After=network.target sound.target
+Wants=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/playthread/playthread -config /opt/playthread/config.yaml
+WorkingDirectory=/opt/playthread
+Restart=always
+RestartSec=1s
+LimitNOFILE=65536
+
+# 环境变量
+Environment=GOGC=100
+
+# 日志
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=playthread
+
+# 安全加固
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/playthread/data /opt/playthread/logs /opt/playthread/cache
+
+[Install]
+WantedBy=multi-user.target

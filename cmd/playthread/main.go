@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
@@ -31,6 +32,18 @@ var (
 func main() {
 	configPath := flag.String("config", "config.yaml", "配置文件路径")
 	flag.Parse()
+
+	// 单例检查：防止多开
+	lockHandle, err := platform.AcquireSingletonLock("playthread-go")
+	if err != nil {
+		if err == platform.ErrAlreadyRunning {
+			fmt.Fprintln(os.Stderr, "错误: Playthread 已在运行，不允许多开")
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "单例检查失败: %v\n", err)
+		os.Exit(1)
+	}
+	defer platform.ReleaseSingletonLock(lockHandle)
 
 	cfg, err := infra.LoadConfig(*configPath)
 	if err != nil {
@@ -93,6 +106,10 @@ func main() {
 	defer pm.Stop()
 
 	log.Info().Msg("播放服务子进程已启动")
+
+	// 运行时监控
+	monitor := infra.NewMonitor(&cfg.Monitor, "data")
+	go monitor.Run(ctx)
 
 	// 核心编排器
 	sm := core.NewStateMachine()

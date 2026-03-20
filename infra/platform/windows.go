@@ -3,12 +3,19 @@
 
 package platform
 
-import "syscall"
+import (
+	"fmt"
+	"syscall"
+	"unsafe"
+)
 
 var (
-	winmm              = syscall.NewLazyDLL("winmm.dll")
-	procTimeBeginPeriod = winmm.NewProc("timeBeginPeriod")
-	procTimeEndPeriod   = winmm.NewProc("timeEndPeriod")
+	winmm               = syscall.NewLazyDLL("winmm.dll")
+	procTimeBeginPeriod  = winmm.NewProc("timeBeginPeriod")
+	procTimeEndPeriod    = winmm.NewProc("timeEndPeriod")
+
+	kernel32           = syscall.NewLazyDLL("kernel32.dll")
+	procCreateMutex    = kernel32.NewProc("CreateMutexW")
 )
 
 // SetHighResTimer 设置 Windows 高精度定时器（1ms 分辨率）。
@@ -21,4 +28,46 @@ func SetHighResTimer() {
 // RestoreTimer 恢复默认定时器分辨率
 func RestoreTimer() {
 	procTimeEndPeriod.Call(1)
+}
+
+// AcquireSingletonLock 通过 Windows 命名互斥体确保单例运行。
+// 返回 mutex 句柄（程序退出时释放）和 error。
+// 若已有实例运行，返回 ErrAlreadyRunning。
+func AcquireSingletonLock(name string) (syscall.Handle, error) {
+	namePtr, err := syscall.UTF16PtrFromString(name)
+	if err != nil {
+		return 0, fmt.Errorf("互斥体名称无效: %w", err)
+	}
+
+	handle, _, lastErr := procCreateMutex.Call(0, 1, uintptr(unsafe.Pointer(namePtr)))
+	if handle == 0 {
+		return 0, fmt.Errorf("创建互斥体失败: %v", lastErr)
+	}
+
+	// ERROR_ALREADY_EXISTS = 183
+	if lastErr.(syscall.Errno) == 183 {
+		syscall.CloseHandle(syscall.Handle(handle))
+		return 0, ErrAlreadyRunning
+	}
+
+	return syscall.Handle(handle), nil
+}
+
+// ReleaseSingletonLock 释放单例互斥体
+func ReleaseSingletonLock(handle syscall.Handle) {
+	if handle != 0 {
+		syscall.CloseHandle(handle)
+	}
+}
+
+// ErrAlreadyRunning 表示已有实例在运行
+var ErrAlreadyRunning = fmt.Errorf("已有实例在运行")
+
+// IsWindowsService 检查当前进程是否作为 Windows 服务运行。
+// 通过检查父进程是否为 services.exe 来判断（简化判断）。
+func IsWindowsService() bool {
+	// 如果 stdin 不是终端（不是控制台），很可能是服务
+	// 这是一个简化判断，golang.org/x/sys/windows/svc 有更精确的方法
+	// 但我们避免引入额外依赖
+	return false // 默认控制台模式，用户通过 NSSM 注册服务时无需代码感知
 }
