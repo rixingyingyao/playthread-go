@@ -119,12 +119,20 @@ func (s *Server) buildRouter(cfg *infra.ServerConfig) chi.Router {
 		r.Get("/datasource", s.handleGetDatasource)
 		r.Get("/monitor", s.handleGetMonitor)
 		r.Post("/update", s.handleTriggerUpdate)
-		r.Get("/system", s.handleSystemInfo)
-		r.Get("/goroutines", s.handleGoroutines)
+
+		// 运行时诊断（仅限 localhost，暴露 goroutine 栈和内存详情）
+		r.Group(func(r chi.Router) {
+			r.Use(LocalhostOnly)
+			r.Get("/system", s.handleSystemInfo)
+			r.Get("/goroutines", s.handleGoroutines)
+		})
 	})
 
-	// 可视化监控仪表盘
-	r.Get("/dashboard", s.handleDashboard)
+	// 可视化监控仪表盘（仅限 localhost）
+	r.Group(func(r chi.Router) {
+		r.Use(LocalhostOnly)
+		r.Get("/dashboard", s.handleDashboard)
+	})
 
 	return r
 }

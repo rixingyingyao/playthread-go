@@ -260,6 +260,39 @@ func TestIntegration_Pprof_Endpoints(t *testing.T) {
 	}
 }
 
+func TestIntegration_Dashboard_LocalhostOnly(t *testing.T) {
+	env := NewTestEnv(t)
+	defer env.Close()
+
+	diagnosticEndpoints := []string{
+		"/dashboard",
+		"/api/v1/infra/system",
+		"/api/v1/infra/goroutines",
+	}
+
+	// localhost should be allowed
+	for _, ep := range diagnosticEndpoints {
+		req := httptest.NewRequest("GET", ep, nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		w := httptest.NewRecorder()
+		env.Handler.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("GET %s from localhost expected 200, got %d", ep, w.Code)
+		}
+	}
+
+	// non-localhost should be rejected
+	for _, ep := range diagnosticEndpoints {
+		req := httptest.NewRequest("GET", ep, nil)
+		req.RemoteAddr = "192.168.1.100:12345"
+		w := httptest.NewRecorder()
+		env.Handler.ServeHTTP(w, req)
+		if w.Code != http.StatusForbidden {
+			t.Errorf("GET %s from non-localhost expected 403, got %d", ep, w.Code)
+		}
+	}
+}
+
 func TestIntegration_ConcurrentRequests(t *testing.T) {
 	env := NewTestEnv(t)
 	defer env.Close()
