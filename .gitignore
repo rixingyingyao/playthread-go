@@ -22,6 +22,8 @@ vendor/
 # BASS 库文件（需要单独分发）
 audio/libs/windows/*.dll
 audio/libs/windows/*.lib
+audio/libs/windows/*.def
+audio/libs/windows/*.a
 audio/libs/linux/*.so
 
 # 日志目录
