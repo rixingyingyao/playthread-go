@@ -164,6 +164,7 @@ func (pt *PlayThread) Run(ctx context.Context) {
 // Wait 等待所有 goroutine 退出（优雅关闭时调用）
 func (pt *PlayThread) Wait() {
 	pt.wg.Wait()
+	pt.fixTimeMgr.Wait()
 }
 
 // FixTimeManager 返回定时任务管理器
@@ -788,16 +789,8 @@ func (pt *PlayThread) onReturnAuto() {
 	log.Info().Msg("返回自动播出模式")
 
 	// 通道保持返回处理
-	if pt.channelHold.IsManualCancel() {
-		log.Info().Msg("通道保持手动取消，重新初始化定时任务")
-		pt.mu.RLock()
-		pl := pt.playlist
-		pt.mu.RUnlock()
-		if pl != nil {
-			pt.fixTimeMgr.InitFromPlaylist(pl, pl.Date)
-			pt.fixTimeMgr.Start()
-		}
-		return
+	if pt.channelHold.IsActive() || pt.channelHold.IsManualCancel() {
+		pt.channelHold.Stop()
 	}
 
 	// 停止垫乐和当前播出
@@ -806,7 +799,6 @@ func (pt *PlayThread) onReturnAuto() {
 
 	pt.mu.RLock()
 	pl := pt.playlist
-	prog := pt.currentProg
 	pt.mu.RUnlock()
 
 	if pl != nil {
@@ -814,9 +806,37 @@ func (pt *PlayThread) onReturnAuto() {
 		pt.fixTimeMgr.Start()
 	}
 
-	if prog == nil {
-		pt.playNextClip(true)
+	// 恢复被插播/通道保持前的播出位置
+	if pt.emrgReturnPos != nil {
+		snap := pt.emrgReturnPos
+		pt.emrgReturnPos = nil
+
+		log.Info().
+			Str("program_id", snap.ProgramID).
+			Int("position_ms", snap.PositionMs).
+			Msg("从应急/通道保持返回，恢复原播出位置")
+
+		pt.mu.Lock()
+		if pl != nil && snap.ProgramIndex >= 0 && snap.ProgramIndex < pl.Len() {
+			pt.currentPos = snap.ProgramIndex
+			prog := pl.FlatList[snap.ProgramIndex]
+			pt.mu.Unlock()
+
+			if err := pt.cueAndPlayAt(prog, snap.PositionMs); err != nil {
+				log.Warn().Err(err).Msg("恢复原播出位置失败，播下一条")
+				pt.playNextClip(true)
+				return
+			}
+			pt.mu.Lock()
+			pt.currentProg = prog
+			pt.currentPos = snap.ProgramIndex + 1
+			pt.mu.Unlock()
+			return
+		}
+		pt.mu.Unlock()
 	}
+
+	pt.playNextClip(true)
 }
 
 func (pt *PlayThread) onEnterManual() {
@@ -1044,6 +1064,9 @@ func (pt *PlayThread) ChannelHoldMgr() *ChannelHold {
 // DelayStart 外部启动通道保持（对齐 C# DelayStart）。
 // 调用后系统进入 RedifDelay 状态，到期自动返回 Auto。
 func (pt *PlayThread) DelayStart(data *ChannelHoldData) error {
+	if data == nil {
+		return fmt.Errorf("通道保持参数不能为空")
+	}
 	status := pt.stateMachine.Status()
 	if status == models.StatusStopped {
 		return fmt.Errorf("播出已停止，无法启动通道保持")

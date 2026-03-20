@@ -62,19 +62,29 @@ type TimeBlock struct {
 	Programs  []Program `json:"programs"`
 	TaskType  TaskType `json:"task_type"`
 	EQName    string   `json:"eq_name,omitempty"`
+	Intercuts []IntercutSection `json:"intercuts,omitempty"` // 插播栏目
+}
+
+// IntercutSection 插播栏目定义（时间块内的定时插播）
+type IntercutSection struct {
+	ID        string    `json:"id"`
+	StartTime string    `json:"start_time"` // HH:MM:SS
+	Programs  []Program `json:"programs"`
+	FadeOutMs int       `json:"fade_out_ms,omitempty"`
 }
 
 // ParseStartTime 解析时间块的开始时间（相对于 baseDate）
 func (tb *TimeBlock) ParseStartTime(baseDate time.Time) (time.Time, error) {
-	return parseHHMMSS(tb.StartTime, baseDate)
+	return ParseHHMMSS(tb.StartTime, baseDate)
 }
 
 // ParseEndTime 解析时间块的结束时间（相对于 baseDate）
 func (tb *TimeBlock) ParseEndTime(baseDate time.Time) (time.Time, error) {
-	return parseHHMMSS(tb.EndTime, baseDate)
+	return ParseHHMMSS(tb.EndTime, baseDate)
 }
 
-func parseHHMMSS(s string, baseDate time.Time) (time.Time, error) {
+// ParseHHMMSS 解析 HH:MM:SS 格式的时间字符串（相对于 baseDate）
+func ParseHHMMSS(s string, baseDate time.Time) (time.Time, error) {
 	var h, m, sec int
 	_, err := fmt.Sscanf(s, "%d:%d:%d", &h, &m, &sec)
 	if err != nil {

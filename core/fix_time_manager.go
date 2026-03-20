@@ -29,6 +29,8 @@ type IntercutTask struct {
 	StartTime time.Time           // 计划触发时间
 	FadeOutMs int                 // 淡出时间(ms)
 	Triggered bool
+	SectionID string              // 所属栏目 ArrangeID
+	Programs  []*models.Program   // 插播素材列表
 }
 
 // FixTimeManager 定时任务管理器（对齐 C# SlaFixTimeTaskManager）。
@@ -422,9 +424,11 @@ func (fm *FixTimeManager) fireIntercutEvent(task *IntercutTask) {
 		Msg("插播任务触发")
 
 	evt := IntercutEvent{
-		ID:      task.ID,
-		Type:    task.Type,
-		DelayMs: task.FadeOutMs,
+		ID:        task.ID,
+		Type:      task.Type,
+		DelayMs:   task.FadeOutMs,
+		SectionID: task.SectionID,
+		Programs:  task.Programs,
 	}
 
 	select {
@@ -492,6 +496,36 @@ func (fm *FixTimeManager) InitFromPlaylist(playlist *models.Playlist, baseDate t
 	}
 
 	fm.SetFixTasks(fixTasks)
+
+	// 从时间块中提取插播任务
+	for bi := range playlist.Blocks {
+		block := &playlist.Blocks[bi]
+		for ii := range block.Intercuts {
+			ic := &block.Intercuts[ii]
+			icTime, err := models.ParseHHMMSS(ic.StartTime, baseDate)
+			if err != nil {
+				log.Warn().Err(err).Str("block", block.Name).Str("intercut", ic.ID).Msg("解析插播开始时间失败")
+				continue
+			}
+			if icTime.Before(now.Add(-time.Duration(fm.taskExpireMs) * time.Millisecond)) {
+				continue
+			}
+			progs := make([]*models.Program, len(ic.Programs))
+			for pi := range ic.Programs {
+				progs[pi] = &ic.Programs[pi]
+			}
+			intercutTasks = append(intercutTasks, &IntercutTask{
+				ID:        ic.ID,
+				ArrangeID: bi*100 + ii,
+				Type:      models.IntercutTimed,
+				StartTime: icTime,
+				FadeOutMs: ic.FadeOutMs,
+				SectionID: ic.ID,
+				Programs:  progs,
+			})
+		}
+	}
+
 	fm.SetIntercutTasks(intercutTasks)
 
 	log.Info().

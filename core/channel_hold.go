@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -42,6 +43,10 @@ func NewChannelHold(onReturn func()) *ChannelHold {
 
 // Start 启动通道保持
 func (ch *ChannelHold) Start(data *ChannelHoldData) error {
+	if data == nil {
+		return fmt.Errorf("通道保持数据不能为空")
+	}
+
 	ch.mu.Lock()
 	defer ch.mu.Unlock()
 
