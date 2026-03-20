@@ -61,12 +61,14 @@ func (s *Server) buildRouter(cfg *infra.ServerConfig) chi.Router {
 
 	// ── localhost-only 诊断端点（不经过 TokenAuth）──
 
-	// 可视化监控仪表盘 + 运行时诊断
+	// 可视化监控仪表盘 + 运行时诊断 + 基础设施只读端点
 	r.Group(func(r chi.Router) {
 		r.Use(LocalhostOnly)
 		r.Get("/dashboard", s.handleDashboard)
 		r.Get("/api/v1/infra/system", s.handleSystemInfo)
 		r.Get("/api/v1/infra/goroutines", s.handleGoroutines)
+		r.Get("/api/v1/infra/datasource", s.handleGetDatasource)
+		r.Get("/api/v1/infra/monitor", s.handleGetMonitor)
 	})
 
 	// pprof 调试端点
@@ -121,10 +123,8 @@ func (s *Server) buildRouter(cfg *infra.ServerConfig) chi.Router {
 			// 播表
 			r.Post("/playlist/load", s.handleLoadPlaylist)
 
-			// 基础设施端点（跟随 TokenAuth）
+			// 基础设施操作端点（需 TokenAuth）
 			r.Route("/infra", func(r chi.Router) {
-				r.Get("/datasource", s.handleGetDatasource)
-				r.Get("/monitor", s.handleGetMonitor)
 				r.Post("/update", s.handleTriggerUpdate)
 			})
 		})
