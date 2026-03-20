@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rixingyingyao/playthread-go/models"
@@ -115,6 +116,9 @@ type DataSourceManager struct {
 	// 基础设施组件引用
 	fileCache    *FileCache
 	offlineStore *OfflineStore
+
+	// 离线补传单飞保护
+	replayInFlight atomic.Bool
 
 	// 回调
 	onDegrade   func(from, to SourceType)    // 降级/回切时通知
@@ -533,11 +537,16 @@ func (dm *DataSourceManager) handleCloudHeartbeat(ok bool) {
 		dm.cloudFailCount = 0
 		dm.lastCloudHB = time.Now()
 
-		// 在线状态下尝试补传离线条目
+		// 在线状态下尝试补传离线条目（单飞保护）
 		if dm.offlineStore != nil && dm.offlineStore.Len() > 0 {
-			store := dm.offlineStore
-			baseURL := dm.cfg.CloudURL
-			go dm.replayOffline(store, baseURL)
+			if dm.replayInFlight.CompareAndSwap(false, true) {
+				store := dm.offlineStore
+				baseURL := dm.cfg.CloudURL
+				go func() {
+					defer dm.replayInFlight.Store(false)
+					dm.replayOffline(store, baseURL)
+				}()
+			}
 		}
 		return
 	}

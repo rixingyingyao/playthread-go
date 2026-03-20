@@ -577,3 +577,227 @@ func getModTime(path string) (time.Time, error) {
 	}
 	return info.ModTime(), nil
 }
+
+// --- Phase 7 业务闭环测试 ---
+
+// TestDataSourceManager_ReplaySingleFlight 验证离线补传单飞保护
+func TestDataSourceManager_ReplaySingleFlight(t *testing.T) {
+	dm := NewDataSourceManager(DefaultDataSourceConfig())
+
+	// 模拟：replayInFlight 已经在运行中
+	dm.replayInFlight.Store(true)
+
+	// 再次尝试 CAS 应该失败（不会启动新的 replay）
+	if dm.replayInFlight.CompareAndSwap(false, true) {
+		t.Error("单飞保护失败：在 replay 运行中仍然返回了 true")
+	}
+
+	// 释放后可以重新获取
+	dm.replayInFlight.Store(false)
+	if !dm.replayInFlight.CompareAndSwap(false, true) {
+		t.Error("释放后应该可以重新获取单飞锁")
+	}
+}
+
+// TestDataSourceManager_OfflineStoreIntegration 验证心跳失败写入离线存储
+func TestDataSourceManager_OfflineStoreIntegration(t *testing.T) {
+	dir := t.TempDir()
+	cfg := DefaultOfflineStoreConfig()
+	cfg.Dir = dir
+	store := NewOfflineStore(cfg)
+
+	dm := NewDataSourceManager(DefaultDataSourceConfig())
+	dm.SetInfra(nil, store)
+
+	// 模拟心跳失败
+	dm.handleCloudHeartbeat(false)
+	dm.handleCloudHeartbeat(false)
+
+	// 应该有 2 条心跳失败记录
+	if store.Len() != 2 {
+		t.Errorf("心跳失败后应有 2 条离线记录, got %d", store.Len())
+	}
+
+	// 第 3 次失败触发降级（默认阈值=3），应增加 1 条心跳 + 1 条降级事件
+	dm.handleCloudHeartbeat(false)
+	if store.Len() != 4 {
+		t.Errorf("降级后应有 4 条离线记录, got %d", store.Len())
+	}
+
+	// 检查降级事件类型
+	entries := store.Peek(4)
+	found := false
+	for _, e := range entries {
+		if e.Type == OfflineEvent {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("应包含降级事件记录")
+	}
+}
+
+// TestDataSourceManager_PlaylistDedup_VersionChange 验证同 ID 不同版本触发更新
+func TestDataSourceManager_PlaylistDedup_VersionChange(t *testing.T) {
+	// 模拟服务端：第一次返回 version=1，第二次返回 version=2（同 ID）
+	callCount := int32(0)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&callCount, 1)
+		pl := PlaylistResponse{
+			Playlist: &models.Playlist{ID: "pl-001", Date: time.Now()},
+			Version:  int(n), // 版本随请求递增
+			Checksum: fmt.Sprintf("checksum-%d", n),
+		}
+		json.NewEncoder(w).Encode(pl)
+	}))
+	defer srv.Close()
+
+	cfg := DefaultDataSourceConfig()
+	cfg.CloudURL = srv.URL
+	dm := NewDataSourceManager(cfg)
+
+	var received []*models.Playlist
+	dm.OnPlaylist(func(pl *models.Playlist) {
+		received = append(received, pl)
+	})
+
+	ctx := context.Background()
+	// 第一次拉取
+	dm.playlistPoll(ctx)
+	// 第二次拉取（同 ID 但 version/checksum 不同）
+	dm.playlistPoll(ctx)
+
+	if len(received) != 2 {
+		t.Errorf("同 ID 不同版本应触发 2 次回调, got %d", len(received))
+	}
+}
+
+// TestDataSourceManager_PlaylistDedup_SameVersion 验证完全相同播单不重复触发
+func TestDataSourceManager_PlaylistDedup_SameVersion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pl := PlaylistResponse{
+			Playlist: &models.Playlist{ID: "pl-fix", Date: time.Now()},
+			Version:  1,
+			Checksum: "abc123",
+		}
+		json.NewEncoder(w).Encode(pl)
+	}))
+	defer srv.Close()
+
+	cfg := DefaultDataSourceConfig()
+	cfg.CloudURL = srv.URL
+	dm := NewDataSourceManager(cfg)
+
+	callCount := 0
+	dm.OnPlaylist(func(pl *models.Playlist) {
+		callCount++
+	})
+
+	ctx := context.Background()
+	dm.playlistPoll(ctx)
+	dm.playlistPoll(ctx)
+	dm.playlistPoll(ctx)
+
+	if callCount != 1 {
+		t.Errorf("相同版本播单应只触发 1 次回调, got %d", callCount)
+	}
+}
+
+// TestDataSourceManager_PreCachePlaylist 验证素材预缓存触发
+func TestDataSourceManager_PreCachePlaylist(t *testing.T) {
+	// 准备 mock 文件下载服务器
+	fileContent := []byte("audio-data-bytes")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(fileContent)
+	}))
+	defer srv.Close()
+
+	cacheDir := t.TempDir()
+	fc := NewFileCache(FileCacheConfig{
+		CacheDir:        cacheDir,
+		MaxSizeMB:       100,
+		RateLimitBytes:  10 * 1024 * 1024,
+		DownloadTimeout: 10 * time.Second,
+		RetryCount:      0,
+		RetryDelay:      time.Millisecond,
+	})
+
+	cfg := DefaultDataSourceConfig()
+	cfg.CloudURL = srv.URL
+	dm := NewDataSourceManager(cfg)
+	dm.SetInfra(fc, nil)
+
+	pl := &models.Playlist{
+		ID: "pl-cache-test",
+		Blocks: []models.TimeBlock{
+			{
+				Programs: []models.Program{
+					{FilePath: "test/audio1.mp3"},
+					{FilePath: "test/audio2.mp3"},
+					{FilePath: "", Name: "empty"},           // 应跳过
+					{FilePath: "sig", SignalID: 1, Name: "sig"}, // 信号源，应跳过
+				},
+			},
+		},
+	}
+
+	dm.preCachePlaylist(context.Background(), pl, fc)
+
+	// 检查文件是否被下载
+	if !fc.Exists("test/audio1.mp3") {
+		t.Error("audio1.mp3 应被预缓存")
+	}
+	if !fc.Exists("test/audio2.mp3") {
+		t.Error("audio2.mp3 应被预缓存")
+	}
+}
+
+// TestDataSourceManager_ReplayOffline 验证离线补传流程
+func TestDataSourceManager_ReplayOffline(t *testing.T) {
+	dir := t.TempDir()
+	cfg := DefaultOfflineStoreConfig()
+	cfg.Dir = dir
+	store := NewOfflineStore(cfg)
+
+	// 添加测试数据
+	store.Add(OfflineHeartbeat, map[string]string{"time": "t1"})
+	store.Add(OfflineHeartbeat, map[string]string{"time": "t2"})
+	store.Add(OfflineEvent, map[string]string{"event": "degrade"})
+
+	// 模拟补传目标服务器
+	var uploaded int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&uploaded, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	dm := NewDataSourceManager(DefaultDataSourceConfig())
+	dm.replayOffline(store, srv.URL)
+
+	if atomic.LoadInt32(&uploaded) != 3 {
+		t.Errorf("应补传 3 条, got %d", uploaded)
+	}
+	if store.Len() != 0 {
+		t.Errorf("补传完成后队列应为空, got %d", store.Len())
+	}
+}
+
+// TestDataSourceManager_SetInfra 验证 SetInfra 注入
+func TestDataSourceManager_SetInfra(t *testing.T) {
+	dm := NewDataSourceManager(DefaultDataSourceConfig())
+
+	fc := NewFileCache(FileCacheConfig{CacheDir: t.TempDir()})
+	store := NewOfflineStore(OfflineStoreConfig{Dir: t.TempDir()})
+
+	dm.SetInfra(fc, store)
+
+	dm.mu.RLock()
+	defer dm.mu.RUnlock()
+	if dm.fileCache != fc {
+		t.Error("fileCache 未正确注入")
+	}
+	if dm.offlineStore != store {
+		t.Error("offlineStore 未正确注入")
+	}
+}
