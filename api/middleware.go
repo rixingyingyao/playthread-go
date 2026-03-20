@@ -119,6 +119,7 @@ func Recoverer(next http.Handler) http.Handler {
 }
 
 // TokenAuth 基于 Bearer Token 的认证中间件
+// HTTP 请求只认 Authorization: Bearer 头；WebSocket 握手额外支持 ?token= 查询参数
 func TokenAuth(token string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -127,7 +128,8 @@ func TokenAuth(token string) func(http.Handler) http.Handler {
 			const prefix = "Bearer "
 			if strings.HasPrefix(auth, prefix) {
 				got = auth[len(prefix):]
-			} else {
+			} else if strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+				// 仅对 WebSocket 握手请求允许 query param 传递 token
 				got = r.URL.Query().Get("token")
 			}
 			if got == "" {

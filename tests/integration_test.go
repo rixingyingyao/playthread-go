@@ -341,6 +341,29 @@ func TestIntegration_Dashboard_BypassesTokenAuth(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("GET /api/v1/status with token expected 200, got %d", w.Code)
 	}
+
+	// Business API with ?token= query param (non-WS) should be REJECTED (401)
+	// query-token is only allowed for WebSocket upgrade requests
+	req = httptest.NewRequest("GET", "/api/v1/status?token=test-secret-token", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("GET /api/v1/status?token=... (non-WS) expected 401, got %d — query token must only work for WebSocket", w.Code)
+	}
+
+	// WebSocket upgrade with ?token= query param should NOT get 401
+	req = httptest.NewRequest("GET", "/ws/playback?token=test-secret-token", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Sec-WebSocket-Version", "13")
+	req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code == http.StatusUnauthorized {
+		t.Errorf("WS /ws/playback?token=... expected non-401 (WS upgrade), got 401 — query token should work for WebSocket")
+	}
 }
 
 func TestIntegration_ConcurrentRequests(t *testing.T) {
