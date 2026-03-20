@@ -220,6 +220,22 @@ func (ab *AudioBridge) GetPosition(channel int) (*PositionResult, error) {
 	return &result, nil
 }
 
+// GetLevel 获取指定通道的音频电平
+func (ab *AudioBridge) GetLevel(channel int) (*LevelResult, error) {
+	resp, err := ab.Call(MethodLevel, &ChannelParams{Channel: channel})
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != "" {
+		return nil, fmt.Errorf("获取电平失败: %s", resp.Error)
+	}
+	var result LevelResult
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return nil, fmt.Errorf("解析电平数据失败: %w", err)
+	}
+	return &result, nil
+}
+
 // Pause 暂停指定通道（支持淡出暂停）
 func (ab *AudioBridge) Pause(channel int, fadeMs int) error {
 	resp, err := ab.Call(MethodPause, &PauseParams{Channel: channel, FadeMs: fadeMs})

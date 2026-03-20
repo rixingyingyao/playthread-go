@@ -928,19 +928,47 @@ func (pt *PlayThread) currentProgID() string {
 	return ""
 }
 
-// snapshotLoop 定期保存播出快照
+// snapshotLoop 定期保存播出快照 + 广播播出进度
 func (pt *PlayThread) snapshotLoop(ctx context.Context) {
-	interval := time.Duration(pt.cfg.Playback.SnapshotIntervalS) * time.Second
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	snapInterval := time.Duration(pt.cfg.Playback.SnapshotIntervalS) * time.Second
+	snapTicker := time.NewTicker(snapInterval)
+	defer snapTicker.Stop()
+
+	progressTicker := time.NewTicker(1 * time.Second)
+	defer progressTicker.Stop()
 
 	for {
 		select {
-		case <-ticker.C:
+		case <-snapTicker.C:
 			pt.saveSnapshot()
+		case <-progressTicker.C:
+			pt.emitProgress()
 		case <-ctx.Done():
 			pt.saveSnapshot()
 			return
+		}
+	}
+}
+
+// emitProgress 广播当前播出进度和音频电平（WebSocket 客户端消费）
+func (pt *PlayThread) emitProgress() {
+	if pt.stateMachine.Status() != models.StatusAuto {
+		return
+	}
+	prog := pt.GetProgress()
+	if prog == nil {
+		return
+	}
+	pt.eventBus.Emit(models.NewBroadcastEvent(models.EventPlayProgress, prog))
+
+	// 音频电平推送
+	if pt.audioBridge != nil {
+		if level, err := pt.audioBridge.GetLevel(int(models.ChanMainOut)); err == nil && level != nil {
+			pt.eventBus.Emit(models.NewBroadcastEvent(models.EventAudioLevel, models.AudioLevelEvent{
+				Channel: models.ChanMainOut,
+				Left:    level.Left,
+				Right:   level.Right,
+			}))
 		}
 	}
 }

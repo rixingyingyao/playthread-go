@@ -168,6 +168,29 @@ func TestControlPause(t *testing.T) {
 	}
 }
 
+func TestControlPauseThenPlay(t *testing.T) {
+	srv, cleanup := newTestServer(t)
+	defer cleanup()
+
+	// 先 pause
+	doJSON(t, srv.Router(), "POST", "/api/v1/control/pause", nil)
+
+	// 再 play — 应清除 suspended 标志
+	rr := doJSON(t, srv.Router(), "POST", "/api/v1/control/play", nil)
+	if rr.Code != 200 {
+		t.Fatalf("期望 200，得到 %d", rr.Code)
+	}
+
+	rr2 := doJSON(t, srv.Router(), "GET", "/api/v1/status", nil)
+	resp2 := decodeResp(t, rr2)
+	data, _ := json.Marshal(resp2.Data)
+	var status StatusResponse
+	json.Unmarshal(data, &status)
+	if status.Suspended {
+		t.Error("play 后 Suspended 应为 false")
+	}
+}
+
 func TestControlNext(t *testing.T) {
 	srv, cleanup := newTestServer(t)
 	defer cleanup()
@@ -441,5 +464,73 @@ func TestParseStatus(t *testing.T) {
 		if s != tt.expect {
 			t.Errorf("parseStatus(%q) = %v, 期望 %v", tt.input, s, tt.expect)
 		}
+	}
+}
+
+// --- 认证/限流测试 ---
+
+func TestTokenAuth_Reject(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := TokenAuth("secret123")(inner)
+
+	// 无 token
+	req := httptest.NewRequest("GET", "/", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("无 token 期望 401，得到 %d", rr.Code)
+	}
+
+	// 错误 token
+	req = httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", "Bearer wrong")
+	rr = httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Errorf("错误 token 期望 401，得到 %d", rr.Code)
+	}
+}
+
+func TestTokenAuth_Accept(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := TokenAuth("secret123")(inner)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", "Bearer secret123")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Errorf("正确 token 期望 200，得到 %d", rr.Code)
+	}
+}
+
+func TestRateLimiter_Exceed(t *testing.T) {
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	rl := NewRateLimiter(3)
+	handler := rl.Handler(inner)
+
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.RemoteAddr = "192.168.1.1:12345"
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("第 %d 次请求期望 200，得到 %d", i+1, rr.Code)
+		}
+	}
+
+	// 第 4 次应被限流
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "192.168.1.1:12345"
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusTooManyRequests {
+		t.Errorf("超限请求期望 429，得到 %d", rr.Code)
 	}
 }

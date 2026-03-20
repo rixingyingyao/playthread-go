@@ -32,17 +32,24 @@ func NewServer(cfg *infra.Config, pt *core.PlayThread) *Server {
 
 	pt.EventBus().Subscribe(s.hub)
 
-	s.router = s.buildRouter(cfg.Server.WSPath)
+	s.router = s.buildRouter(&cfg.Server)
 	return s
 }
 
-func (s *Server) buildRouter(wsPath string) chi.Router {
+func (s *Server) buildRouter(cfg *infra.ServerConfig) chi.Router {
 	r := chi.NewRouter()
 
 	r.Use(Recoverer)
 	r.Use(RequestID)
 	r.Use(Logger)
-	r.Use(CORS)
+	r.Use(CORSWithOrigins(cfg.AllowedOrigins))
+
+	if cfg.RateLimitRPS > 0 {
+		r.Use(NewRateLimiter(cfg.RateLimitRPS).Handler)
+	}
+	if cfg.APIToken != "" {
+		r.Use(TokenAuth(cfg.APIToken))
+	}
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// 查询
@@ -75,6 +82,7 @@ func (s *Server) buildRouter(wsPath string) chi.Router {
 	})
 
 	// WebSocket
+	wsPath := cfg.WSPath
 	if wsPath == "" {
 		wsPath = "/ws/playback"
 	}

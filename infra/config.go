@@ -50,10 +50,13 @@ type PaddingConfig struct {
 
 // ServerConfig HTTP/WebSocket/UDP 配置
 type ServerConfig struct {
-	Host    string `yaml:"host"`     // 监听地址
-	Port    int    `yaml:"port"`     // HTTP 端口
-	WSPath  string `yaml:"ws_path"` // WebSocket 路径
-	UDPAddr string `yaml:"udp_addr"` // UDP 监听地址
+	Host           string   `yaml:"host"`             // 监听地址
+	Port           int      `yaml:"port"`             // HTTP 端口
+	WSPath         string   `yaml:"ws_path"`          // WebSocket 路径
+	UDPAddr        string   `yaml:"udp_addr"`         // UDP 监听地址
+	APIToken       string   `yaml:"api_token"`        // API 认证令牌，为空则不启用认证
+	AllowedOrigins []string `yaml:"allowed_origins"`  // CORS 允许的源，为空则全放行
+	RateLimitRPS   int      `yaml:"rate_limit_rps"`   // 每 IP 每秒最大请求数，0=不限
 }
 
 // MonitorConfig 监控配置

@@ -3,9 +3,12 @@ package api
 import (
 	"bufio"
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -69,19 +72,34 @@ func Logger(next http.Handler) http.Handler {
 	})
 }
 
-// CORS 添加跨域头（开发阶段全放行）
-func CORS(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID")
-		w.Header().Set("Access-Control-Max-Age", "86400")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+// CORSWithOrigins 添加跨域头，支持配置允许的源
+func CORSWithOrigins(allowed []string) func(http.Handler) http.Handler {
+	allowAll := len(allowed) == 0
+	set := make(map[string]struct{}, len(allowed))
+	for _, o := range allowed {
+		set[strings.ToLower(o)] = struct{}{}
+	}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+			if allowAll {
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+			} else if _, ok := set[strings.ToLower(origin)]; ok {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Vary", "Origin")
+			} else {
+				// 非允许源：不设 CORS 头，浏览器会拒绝
+			}
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Request-ID")
+			w.Header().Set("Access-Control-Max-Age", "86400")
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // Recoverer 从 panic 中恢复，返回 500
@@ -96,6 +114,75 @@ func Recoverer(next http.Handler) http.Handler {
 				http.Error(w, `{"code":500,"message":"internal server error"}`, http.StatusInternalServerError)
 			}
 		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// TokenAuth 基于 Bearer Token 的认证中间件
+func TokenAuth(token string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			auth := r.Header.Get("Authorization")
+			const prefix = "Bearer "
+			if !strings.HasPrefix(auth, prefix) {
+				http.Error(w, `{"code":401,"message":"missing authorization"}`, http.StatusUnauthorized)
+				return
+			}
+			got := auth[len(prefix):]
+			if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+				http.Error(w, `{"code":401,"message":"invalid token"}`, http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// ipLimiter 单个 IP 的滑动窗口计数器
+type ipLimiter struct {
+	count    int
+	windowAt time.Time
+}
+
+// RateLimiter 基于 IP 的每秒请求限流中间件
+type RateLimiter struct {
+	mu      sync.Mutex
+	clients map[string]*ipLimiter
+	rps     int
+}
+
+// NewRateLimiter 创建限流器
+func NewRateLimiter(rps int) *RateLimiter {
+	return &RateLimiter{
+		clients: make(map[string]*ipLimiter),
+		rps:     rps,
+	}
+}
+
+// Handler 返回限流中间件
+func (rl *RateLimiter) Handler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if ip == "" {
+			ip = r.RemoteAddr
+		}
+
+		rl.mu.Lock()
+		now := time.Now()
+		lim, ok := rl.clients[ip]
+		if !ok || now.Sub(lim.windowAt) >= time.Second {
+			rl.clients[ip] = &ipLimiter{count: 1, windowAt: now}
+			rl.mu.Unlock()
+			next.ServeHTTP(w, r)
+			return
+		}
+		lim.count++
+		if lim.count > rl.rps {
+			rl.mu.Unlock()
+			http.Error(w, `{"code":429,"message":"rate limit exceeded"}`, http.StatusTooManyRequests)
+			return
+		}
+		rl.mu.Unlock()
 		next.ServeHTTP(w, r)
 	})
 }

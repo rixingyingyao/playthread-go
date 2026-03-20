@@ -104,6 +104,8 @@ func (s *Server) handlePlay(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
 	}
+	// 确保取消挂起状态，否则 pause 后再 play 不会恢复推进
+	s.pt.Resume()
 	writeOK(w, nil)
 }
 
