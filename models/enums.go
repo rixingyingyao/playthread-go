@@ -201,6 +201,16 @@ func (c ChannelName) String() string {
 	return fmt.Sprintf("ChannelName(%d)", c)
 }
 
+// ParseChannelName 将字符串解析为 ChannelName 枚举值
+func ParseChannelName(s string) (ChannelName, bool) {
+	for i, name := range channelNames {
+		if name == s {
+			return ChannelName(i), true
+		}
+	}
+	return 0, false
+}
+
 // SharesMainOutDevice 判断该通道是否共用 MainOut 的物理设备
 func (c ChannelName) SharesMainOutDevice() bool {
 	return c == ChanFillBlank || c == ChanTellTime || c == ChanEffect || c == ChanTempList

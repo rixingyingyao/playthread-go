@@ -392,7 +392,7 @@ func TestUDP_Commands(t *testing.T) {
 	// 让系统自动分配端口
 	listener := NewUDPListener("127.0.0.1:0", pt)
 	go listener.Run(ctx)
-	time.Sleep(300 * time.Millisecond)
+	<-listener.ready
 
 	if listener.conn == nil {
 		t.Fatal("UDP 监听器未启动")

@@ -15,23 +15,26 @@ import (
 
 // UDPListener 本地紧急控制 UDP 监听器
 type UDPListener struct {
-	addr string
-	pt   *core.PlayThread
-	conn net.PacketConn
+	addr  string
+	pt    *core.PlayThread
+	conn  net.PacketConn
+	ready chan struct{} // Run 完成监听初始化后关闭
 }
 
 // NewUDPListener 创建 UDP 监听器
 func NewUDPListener(addr string, pt *core.PlayThread) *UDPListener {
-	return &UDPListener{addr: addr, pt: pt}
+	return &UDPListener{addr: addr, pt: pt, ready: make(chan struct{})}
 }
 
 // Run 启动 UDP 监听（阻塞，需在 goroutine 中调用）
 func (u *UDPListener) Run(ctx context.Context) error {
 	conn, err := net.ListenPacket("udp", u.addr)
 	if err != nil {
+		close(u.ready)
 		return fmt.Errorf("UDP 监听失败 %s: %w", u.addr, err)
 	}
 	u.conn = conn
+	close(u.ready)
 	log.Info().Str("addr", u.addr).Msg("UDP 监听已启动")
 
 	go func() {

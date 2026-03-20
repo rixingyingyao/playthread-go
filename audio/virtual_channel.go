@@ -26,6 +26,9 @@ const (
 	ChanCount     = models.ChanCount
 )
 
+// ParseChannelName 转发 models.ParseChannelName
+var ParseChannelName = models.ParseChannelName
+
 // VirtualChannel 虚拟通道
 type VirtualChannel struct {
 	Name     ChannelName
