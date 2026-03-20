@@ -49,6 +49,7 @@ func NewServer(cfg *infra.Config, pt *core.PlayThread) *Server {
 func (s *Server) buildRouter(cfg *infra.ServerConfig) chi.Router {
 	r := chi.NewRouter()
 
+	// 基础中间件（所有路由共享）
 	r.Use(Recoverer)
 	r.Use(RequestID)
 	r.Use(Logger)
@@ -57,48 +58,18 @@ func (s *Server) buildRouter(cfg *infra.ServerConfig) chi.Router {
 	if cfg.RateLimitRPS > 0 {
 		r.Use(NewRateLimiter(cfg.RateLimitRPS).Handler)
 	}
-	if cfg.APIToken != "" {
-		r.Use(TokenAuth(cfg.APIToken))
-	}
 
-	r.Route("/api/v1", func(r chi.Router) {
-		// 查询
-		r.Get("/status", s.handleGetStatus)
-		r.Get("/progress", s.handleGetProgress)
-		r.Get("/playlist", s.handleGetPlaylist)
+	// ── localhost-only 诊断端点（不经过 TokenAuth）──
 
-		// 播出控制
-		r.Post("/control/play", s.handlePlay)
-		r.Post("/control/pause", s.handlePause)
-		r.Post("/control/stop", s.handleStop)
-		r.Post("/control/next", s.handleNext)
-		r.Post("/control/jump", s.handleJump)
-		r.Post("/control/status", s.handleChangeStatus)
-
-		// 垫乐
-		r.Post("/control/blank/start", s.handleBlankStart)
-		r.Post("/control/blank/stop", s.handleBlankStop)
-
-		// 通道保持
-		r.Post("/control/delay/start", s.handleDelayStart)
-		r.Post("/control/delay/stop", s.handleDelayStop)
-
-		// 插播
-		r.Post("/intercut/start", s.handleIntercutStart)
-		r.Post("/intercut/stop", s.handleIntercutStop)
-
-		// 播表
-		r.Post("/playlist/load", s.handleLoadPlaylist)
+	// 可视化监控仪表盘 + 运行时诊断
+	r.Group(func(r chi.Router) {
+		r.Use(LocalhostOnly)
+		r.Get("/dashboard", s.handleDashboard)
+		r.Get("/api/v1/infra/system", s.handleSystemInfo)
+		r.Get("/api/v1/infra/goroutines", s.handleGoroutines)
 	})
 
-	// WebSocket
-	wsPath := cfg.WSPath
-	if wsPath == "" {
-		wsPath = "/ws/playback"
-	}
-	r.Get(wsPath, s.hub.ServeWS)
-
-	// pprof 调试端点（仅限 localhost 访问）
+	// pprof 调试端点
 	r.Route("/debug/pprof", func(r chi.Router) {
 		r.Use(LocalhostOnly)
 		r.Get("/", pprof.Index)
@@ -114,24 +85,56 @@ func (s *Server) buildRouter(cfg *infra.ServerConfig) chi.Router {
 		r.Handle("/threadcreate", pprof.Handler("threadcreate"))
 	})
 
-	// 基础设施诊断端点
-	r.Route("/api/v1/infra", func(r chi.Router) {
-		r.Get("/datasource", s.handleGetDatasource)
-		r.Get("/monitor", s.handleGetMonitor)
-		r.Post("/update", s.handleTriggerUpdate)
+	// ── 需要 TokenAuth 的业务端点 ──
 
-		// 运行时诊断（仅限 localhost，暴露 goroutine 栈和内存详情）
-		r.Group(func(r chi.Router) {
-			r.Use(LocalhostOnly)
-			r.Get("/system", s.handleSystemInfo)
-			r.Get("/goroutines", s.handleGoroutines)
-		})
-	})
-
-	// 可视化监控仪表盘（仅限 localhost）
 	r.Group(func(r chi.Router) {
-		r.Use(LocalhostOnly)
-		r.Get("/dashboard", s.handleDashboard)
+		if cfg.APIToken != "" {
+			r.Use(TokenAuth(cfg.APIToken))
+		}
+
+		r.Route("/api/v1", func(r chi.Router) {
+			// 查询
+			r.Get("/status", s.handleGetStatus)
+			r.Get("/progress", s.handleGetProgress)
+			r.Get("/playlist", s.handleGetPlaylist)
+
+			// 播出控制
+			r.Post("/control/play", s.handlePlay)
+			r.Post("/control/pause", s.handlePause)
+			r.Post("/control/stop", s.handleStop)
+			r.Post("/control/next", s.handleNext)
+			r.Post("/control/jump", s.handleJump)
+			r.Post("/control/status", s.handleChangeStatus)
+
+			// 垫乐
+			r.Post("/control/blank/start", s.handleBlankStart)
+			r.Post("/control/blank/stop", s.handleBlankStop)
+
+			// 通道保持
+			r.Post("/control/delay/start", s.handleDelayStart)
+			r.Post("/control/delay/stop", s.handleDelayStop)
+
+			// 插播
+			r.Post("/intercut/start", s.handleIntercutStart)
+			r.Post("/intercut/stop", s.handleIntercutStop)
+
+			// 播表
+			r.Post("/playlist/load", s.handleLoadPlaylist)
+
+			// 基础设施端点（跟随 TokenAuth）
+			r.Route("/infra", func(r chi.Router) {
+				r.Get("/datasource", s.handleGetDatasource)
+				r.Get("/monitor", s.handleGetMonitor)
+				r.Post("/update", s.handleTriggerUpdate)
+			})
+		})
+
+		// WebSocket
+		wsPath := cfg.WSPath
+		if wsPath == "" {
+			wsPath = "/ws/playback"
+		}
+		r.Get(wsPath, s.hub.ServeWS)
 	})
 
 	return r

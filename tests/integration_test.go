@@ -293,6 +293,55 @@ func TestIntegration_Dashboard_LocalhostOnly(t *testing.T) {
 	}
 }
 
+func TestIntegration_Dashboard_BypassesTokenAuth(t *testing.T) {
+	// When api_token is configured, dashboard must still work from localhost
+	// without providing a token (it bypasses TokenAuth entirely)
+	cfg := infra.DefaultConfig()
+	cfg.Server.APIToken = "test-secret-token"
+
+	sm := core.NewStateMachine()
+	eb := core.NewEventBus()
+	snap := infra.NewSnapshotManager(t.TempDir())
+	pt := core.NewPlayThread(cfg, sm, eb, nil, snap)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() { cancel(); pt.Wait() }()
+	pt.Run(ctx)
+
+	srv := api.NewServer(cfg, pt)
+	handler := srv.Router()
+
+	// Dashboard from localhost should get 200 even without token
+	for _, ep := range []string{"/dashboard", "/api/v1/infra/system", "/api/v1/infra/goroutines"} {
+		req := httptest.NewRequest("GET", ep, nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("GET %s from localhost (token configured) expected 200, got %d", ep, w.Code)
+		}
+	}
+
+	// Business API without token should get 401
+	req := httptest.NewRequest("GET", "/api/v1/status", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("GET /api/v1/status without token expected 401, got %d", w.Code)
+	}
+
+	// Business API with token should get 200
+	req = httptest.NewRequest("GET", "/api/v1/status", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+	req.Header.Set("Authorization", "Bearer test-secret-token")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Errorf("GET /api/v1/status with token expected 200, got %d", w.Code)
+	}
+}
+
 func TestIntegration_ConcurrentRequests(t *testing.T) {
 	env := NewTestEnv(t)
 	defer env.Close()
