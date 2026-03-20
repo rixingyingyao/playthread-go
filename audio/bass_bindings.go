@@ -14,6 +14,9 @@ extern void  goFileCloseProc(void* user);
 extern QWORD goFileLenProc(void* user);
 extern DWORD goFileReadProc(void* buffer, DWORD length, void* user);
 extern BOOL  goFileSeekProc(QWORD offset, void* user);
+
+// 录音回调
+extern BOOL goRecordProc(HRECORD handle, void* buffer, DWORD length, void* user);
 */
 import "C"
 import (
@@ -535,6 +538,28 @@ func BassRecordEnumDevices() []BassDeviceInfo {
 		})
 	}
 	return devices
+}
+
+// BassRecordStart 开始录音（使用 RECORDPROC 回调采集 PCM 数据）
+func BassRecordStart(freq, chans, flags int) (uint32, error) {
+	handle := C.BASS_RecordStart(C.DWORD(freq), C.DWORD(chans), C.DWORD(flags),
+		(*C.RECORDPROC)(C.goRecordProc), nil)
+	if handle == 0 {
+		return 0, fmt.Errorf("BASS_RecordStart 失败: freq=%d, chans=%d, errCode=%d",
+			freq, chans, C.BASS_ErrorGetCode())
+	}
+	return uint32(handle), nil
+}
+
+//export goRecordProc
+func goRecordProc(handle C.HRECORD, buffer unsafe.Pointer, length C.DWORD, user unsafe.Pointer) C.BOOL {
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Fprintf(os.Stderr, "BASS 录音回调 panic: %v\n", r)
+		}
+	}()
+	onRecordData(buffer, int(length))
+	return C.TRUE
 }
 
 // ==================== 配置 ====================

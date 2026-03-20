@@ -23,6 +23,9 @@ const (
 	EventError           EventType = "error"
 	EventHeartbeat       EventType = "heartbeat"
 	EventJingleControl   EventType = "jingle_control"
+	EventNextClip1       EventType = "next_clip_1"
+	EventNextClip2       EventType = "next_clip_2"
+	EventRecordProgress  EventType = "record_progress"
 )
 
 // StatusChangeEvent 状态变更事件

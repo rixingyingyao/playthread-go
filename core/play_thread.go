@@ -524,6 +524,11 @@ func (pt *PlayThread) playNextClip(force bool) bool {
 		pt.currentPos++
 		pt.mu.Unlock()
 
+		// 信号切换（对齐 C# m_nextsignalControl 信号源切换逻辑）
+		if program.IsSignalSource() {
+			pt.switchSignal(program.SignalID, program.Name)
+		}
+
 		// 垫乐让位：主播出开始时停止垫乐
 		if pt.blankMgr.IsPlaying() {
 			pt.blankMgr.YieldTo(pt.cfg.Audio.FadeOutMs)
@@ -537,6 +542,9 @@ func (pt *PlayThread) playNextClip(force bool) bool {
 			LengthMs: program.EffectiveDuration(),
 			Channel:  models.ChanMainOut,
 		}))
+
+		// 预告下一条/下两条素材（对齐 C# _FindNextProgram + Next1ClipUpdate/Next2ClipUpdate）
+		pt.emitNextClipPreview()
 
 		return true
 	}
@@ -895,6 +903,12 @@ func (pt *PlayThread) stopPlayback() {
 		_ = pt.audioBridge.Stop(int(models.ChanMainOut), pt.cfg.Audio.FadeOutMs)
 	}
 
+	// 清除倒计时和预告（对齐 C# TryChangeStatus_Auto2Stop）
+	pt.eventBus.Emit(models.NewBroadcastEvent(models.EventCountDown, models.CountDownEvent{Value: 0, Total: 1}))
+	pt.eventBus.Emit(models.NewBroadcastEvent(models.EventPlayStarted, models.PlayingClipEvent{}))
+	pt.eventBus.Emit(models.NewBroadcastEvent(models.EventNextClip1, models.PlayingClipEvent{}))
+	pt.eventBus.Emit(models.NewBroadcastEvent(models.EventNextClip2, models.PlayingClipEvent{}))
+
 	pt.mu.Lock()
 	pt.currentProg = nil
 	pt.mu.Unlock()
@@ -950,7 +964,7 @@ func (pt *PlayThread) snapshotLoop(ctx context.Context) {
 	}
 }
 
-// emitProgress 广播当前播出进度和音频电平（WebSocket 客户端消费）
+// emitProgress 广播当前播出进度、倒计时和音频电平（WebSocket 客户端消费）
 func (pt *PlayThread) emitProgress() {
 	if pt.stateMachine.Status() != models.StatusAuto {
 		return
@@ -960,6 +974,18 @@ func (pt *PlayThread) emitProgress() {
 		return
 	}
 	pt.eventBus.Emit(models.NewBroadcastEvent(models.EventPlayProgress, prog))
+
+	// 倒计时推送（对齐 C# CountDownUpdate）
+	remainMs := prog.DurationMs - prog.PositionMs
+	if remainMs < 0 {
+		remainMs = 0
+	}
+	totalSec := prog.DurationMs / 1000
+	remainSec := remainMs / 1000
+	pt.eventBus.Emit(models.NewBroadcastEvent(models.EventCountDown, models.CountDownEvent{
+		Value: remainSec,
+		Total: totalSec,
+	}))
 
 	// 音频电平推送
 	if pt.audioBridge != nil {
@@ -1016,6 +1042,42 @@ func (pt *PlayThread) saveSnapshot() {
 }
 
 // --- 信号切换 ---
+
+// emitNextClipPreview 广播下一条/下两条素材预告（对齐 C# Next1ClipUpdate / Next2ClipUpdate）
+func (pt *PlayThread) emitNextClipPreview() {
+	pt.mu.RLock()
+	pl := pt.playlist
+	pos := pt.currentPos
+	pt.mu.RUnlock()
+
+	if pl == nil {
+		return
+	}
+
+	// Next1: 当前 pos 就是下一条（currentPos 已在 playNextClip 中 ++）
+	next1 := pl.FindNext(pos)
+	if next1 != nil {
+		pt.eventBus.Emit(models.NewBroadcastEvent(models.EventNextClip1, models.PlayingClipEvent{
+			Program:  next1,
+			LengthMs: next1.EffectiveDuration(),
+			Channel:  models.ChanMainOut,
+		}))
+		// Next2: 再下一条
+		next2 := pl.FindNext(pos + 1)
+		if next2 != nil {
+			pt.eventBus.Emit(models.NewBroadcastEvent(models.EventNextClip2, models.PlayingClipEvent{
+				Program:  next2,
+				LengthMs: next2.EffectiveDuration(),
+				Channel:  models.ChanMainOut,
+			}))
+		} else {
+			pt.eventBus.Emit(models.NewBroadcastEvent(models.EventNextClip2, models.PlayingClipEvent{}))
+		}
+	} else {
+		pt.eventBus.Emit(models.NewBroadcastEvent(models.EventNextClip1, models.PlayingClipEvent{}))
+		pt.eventBus.Emit(models.NewBroadcastEvent(models.EventNextClip2, models.PlayingClipEvent{}))
+	}
+}
 
 // switchSignal 切换信号源（含去重防抖）。
 // 对齐 C# _LastSwitchTime 防抖：500ms 内重复切换同一信号则跳过。
