@@ -175,6 +175,8 @@ QWORD    WINAPI BASS_ChannelSeconds2Bytes(DWORD handle, double pos);
 /* 属性 */
 BOOL     WINAPI BASS_ChannelSetAttribute(DWORD handle, DWORD attrib, float value);
 BOOL     WINAPI BASS_ChannelGetAttribute(DWORD handle, DWORD attrib, float *value);
+BOOL     WINAPI BASS_ChannelSlideAttribute(DWORD handle, DWORD attrib, float value, DWORD time);
+BOOL     WINAPI BASS_ChannelIsSliding(DWORD handle, DWORD attrib);
 
 /* 同步 */
 HSYNC    WINAPI BASS_ChannelSetSync(DWORD handle, DWORD type, QWORD param, SYNCPROC *proc, void *user);

@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/rs/zerolog/log"
 )
@@ -196,7 +197,7 @@ func (be *BassEngine) Play(channel int, restart bool) error {
 	return result.(error)
 }
 
-// Stop 停止指定通道
+// Stop 停止指定通道（支持淡出）
 func (be *BassEngine) Stop(channel int, fadeOut int) error {
 	result := be.execCtrl(func() interface{} {
 		ch := be.channels.GetByIndex(channel)
@@ -207,8 +208,24 @@ func (be *BassEngine) Stop(channel int, fadeOut int) error {
 			return nil // 未播放，不算错误
 		}
 
-		// TODO: fadeOut 淡出效果（通过定时器逐步降低音量）
-		// 当前阶段直接停止
+		if fadeOut > 0 {
+			// 使用 BASS_ChannelSlideAttribute 渐变到静音，然后在回调中停止
+			// 先滑动音量到 0
+			if err := BassChannelSlideAttribute(ch.StreamHandle, AttribVol, 0, uint32(fadeOut)); err != nil {
+				// SlideAttribute 失败时回退到硬停
+				return BassChannelStop(ch.StreamHandle)
+			}
+			// 启动 goroutine 等待淡出完成后停止通道
+			handle := ch.StreamHandle
+			go func() {
+				time.Sleep(time.Duration(fadeOut+50) * time.Millisecond)
+				be.execCtrl(func() interface{} {
+					return BassChannelStop(handle)
+				})
+			}()
+			return nil
+		}
+
 		return BassChannelStop(ch.StreamHandle)
 	})
 	if result == nil {
@@ -253,8 +270,13 @@ func (be *BassEngine) Resume(channel int) error {
 	return result.(error)
 }
 
-// SetVolume 设置通道音量
+// SetVolume 设置通道音量（支持渐变）
 func (be *BassEngine) SetVolume(channel int, volume float64) error {
+	return be.SetVolumeWithFade(channel, volume, 0)
+}
+
+// SetVolumeWithFade 设置通道音量（带渐变时间）
+func (be *BassEngine) SetVolumeWithFade(channel int, volume float64, fadeMs int) error {
 	result := be.execCtrl(func() interface{} {
 		ch := be.channels.GetByIndex(channel)
 		if ch == nil {
@@ -262,6 +284,9 @@ func (be *BassEngine) SetVolume(channel int, volume float64) error {
 		}
 		if ch.StreamHandle == 0 {
 			return nil
+		}
+		if fadeMs > 0 {
+			return BassChannelSlideAttribute(ch.StreamHandle, AttribVol, float32(volume), uint32(fadeMs))
 		}
 		return BassChannelSetAttribute(ch.StreamHandle, AttribVol, float32(volume))
 	})

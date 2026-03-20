@@ -231,6 +231,10 @@ func (pt *PlayThread) handlePlayFinished(evt PlayFinishedEvent) {
 	// 软定时等待中：当前素材播完即触发切换
 	if pt.softFixWaiting.Load() {
 		pt.softFixWaiting.Store(false)
+		if pt.cancelSoftFix != nil {
+			pt.cancelSoftFix()
+			pt.cancelSoftFix = nil
+		}
 		pt.playNextClip(true)
 		return
 	}
@@ -335,6 +339,8 @@ func (pt *PlayThread) handleFixTimeArrived(evt FixTimeEvent) {
 	// 取消软定时等待
 	if pt.softFixWaiting.Load() && pt.cancelSoftFix != nil {
 		pt.cancelSoftFix()
+		pt.cancelSoftFix = nil
+		pt.softFixWaiting.Store(false)
 	}
 
 	log.Info().
@@ -765,17 +771,11 @@ func (pt *PlayThread) executeSoftFix(evt FixTimeEvent) {
 	}
 
 	// 设置等待标志和取消句柄。当 playbackLoop 中 handlePlayFinished 检测到
-	// softFixWaiting=true 时，会自动调用 playNextClip(true) 执行定时切换。
+	// softFixWaiting=true 时，会清标志并调用 playNextClip(true) 执行定时切换。
 	// cancelSoftFix 可被 CancelSoftFix() 或 executeHardFix() 调用以取消等待。
-	ctx, cancel := context.WithCancel(context.Background())
+	_, cancel := context.WithCancel(context.Background())
 	pt.cancelSoftFix = cancel
 	pt.softFixWaiting.Store(true)
-
-	go func() {
-		<-ctx.Done()
-		// 取消时清除等待标志（被外部取消而非播完触发时需要）
-		pt.softFixWaiting.Store(false)
-	}()
 
 	log.Info().Str("block_id", evt.BlockID).Msg("软定时等待当前素材播完")
 }
@@ -1046,6 +1046,7 @@ func (pt *PlayThread) CancelSoftFix() {
 		pt.softFixWaiting.Store(false)
 		if pt.cancelSoftFix != nil {
 			pt.cancelSoftFix()
+			pt.cancelSoftFix = nil
 		}
 		log.Info().Msg("软定时等待已取消")
 	}

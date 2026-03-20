@@ -207,7 +207,7 @@ func (s *IPCServer) handleSetVolume(req *bridge.IPCRequest) *bridge.IPCResponse 
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return s.fail(req.ID, fmt.Sprintf("参数解析失败: %v", err))
 	}
-	if err := s.engine.SetVolume(params.Channel, params.Volume); err != nil {
+	if err := s.engine.SetVolumeWithFade(params.Channel, params.Volume, params.FadeMs); err != nil {
 		return s.fail(req.ID, err.Error())
 	}
 	return s.success(req.ID, nil)

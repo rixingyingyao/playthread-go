@@ -212,6 +212,20 @@ func BassChannelGetAttribute(handle uint32, attrib uint32) (float32, error) {
 	return float32(value), nil
 }
 
+// BassChannelSlideAttribute 滑动设置通道属性（渐变，如淡入淡出）
+func BassChannelSlideAttribute(handle uint32, attrib uint32, value float32, timeMs uint32) error {
+	if C.BASS_ChannelSlideAttribute(C.DWORD(handle), C.DWORD(attrib), C.float(value), C.DWORD(timeMs)) == 0 {
+		return fmt.Errorf("BASS_ChannelSlideAttribute 失败: handle=%d, attrib=%d, errCode=%d",
+			handle, attrib, C.BASS_ErrorGetCode())
+	}
+	return nil
+}
+
+// BassChannelIsSliding 检查通道属性是否正在滑动中
+func BassChannelIsSliding(handle uint32, attrib uint32) bool {
+	return C.BASS_ChannelIsSliding(C.DWORD(handle), C.DWORD(attrib)) != 0
+}
+
 // BASS 属性常量
 const (
 	AttribFreq    = C.BASS_ATTRIB_FREQ
