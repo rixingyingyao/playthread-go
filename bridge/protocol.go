@@ -50,6 +50,12 @@ const (
 	MethodSwitchSignal = "switch_signal" // 切换信号源
 	MethodShutdown     = "shutdown"      // 关闭子进程
 	MethodPing         = "ping"          // 心跳检测
+
+	// 录音
+	MethodRecordStart  = "record_start"  // 开始录音
+	MethodRecordStop   = "record_stop"   // 停止录音
+	MethodRecordPause  = "record_pause"  // 暂停录音
+	MethodRecordStatus = "record_status" // 查询录音状态
 )
 
 // --- IPC 事件名常量 ---
@@ -61,6 +67,7 @@ const (
 	EventDeviceRestored = "device_restored" // 设备恢复
 	EventLevel         = "level"           // 音频电平数据
 	EventError         = "error"           // 子进程错误
+	EventRecordProgress = "record_progress" // 录音进度
 )
 
 // --- 常用参数结构 ---
@@ -169,4 +176,16 @@ type SeekParams struct {
 type SwitchSignalParams struct {
 	SignalID   int    `json:"signal_id"`   // 信号源 ID
 	SignalName string `json:"signal_name"` // 信号源名称
+}
+
+// RecordStartParams 开始录音参数
+type RecordStartParams struct {
+	Filename    string `json:"filename"`     // 输出文件路径
+	Device      int    `json:"device"`       // 录音设备索引，-1=默认
+}
+
+// RecordStatusResult 录音状态结果
+type RecordStatusResult struct {
+	Status      int     `json:"status"`       // 0=未录制 1=录制中 2=暂停
+	DurationSec float64 `json:"duration_sec"` // 已录制时长(秒)
 }

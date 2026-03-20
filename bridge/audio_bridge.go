@@ -328,3 +328,58 @@ func (ab *AudioBridge) Shutdown() error {
 	}
 	return nil
 }
+
+// RecordStart 开始录音
+func (ab *AudioBridge) RecordStart(filename string, device int) error {
+	resp, err := ab.Call(MethodRecordStart, RecordStartParams{
+		Filename: filename,
+		Device:   device,
+	})
+	if err != nil {
+		return err
+	}
+	if resp.Error != "" {
+		return fmt.Errorf("录音启动失败: %s", resp.Error)
+	}
+	return nil
+}
+
+// RecordStop 停止录音
+func (ab *AudioBridge) RecordStop() error {
+	resp, err := ab.Call(MethodRecordStop, nil)
+	if err != nil {
+		return err
+	}
+	if resp.Error != "" {
+		return fmt.Errorf("录音停止失败: %s", resp.Error)
+	}
+	return nil
+}
+
+// RecordPause 暂停录音
+func (ab *AudioBridge) RecordPause() error {
+	resp, err := ab.Call(MethodRecordPause, nil)
+	if err != nil {
+		return err
+	}
+	if resp.Error != "" {
+		return fmt.Errorf("录音暂停失败: %s", resp.Error)
+	}
+	return nil
+}
+
+// RecordStatus 查询录音状态
+func (ab *AudioBridge) RecordStatus() (*RecordStatusResult, error) {
+	resp, err := ab.Call(MethodRecordStatus, nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Error != "" {
+		return nil, fmt.Errorf("查询录音状态失败: %s", resp.Error)
+	}
+	var result RecordStatusResult
+	if err := json.Unmarshal(resp.Data, &result); err != nil {
+		return nil, fmt.Errorf("解析录音状态失败: %w", err)
+	}
+	return &result, nil
+}

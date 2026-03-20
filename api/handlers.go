@@ -391,3 +391,74 @@ func (s *Server) handleTriggerUpdate(w http.ResponseWriter, r *http.Request) {
 	writeOK(w, result)
 }
 
+// --- 录音控制 ---
+
+// handleRecordStart POST /api/v1/record/start
+func (s *Server) handleRecordStart(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Filename string `json:"filename"`
+		Device   int    `json:"device"` // 0/-1=默认
+	}
+	if err := decodeBody(r, &req); err != nil {
+		writeErr(w, http.StatusBadRequest, "参数错误: "+err.Error())
+		return
+	}
+	if req.Filename == "" {
+		writeErr(w, http.StatusBadRequest, "filename 不能为空")
+		return
+	}
+	ab := s.pt.AudioBridge()
+	if ab == nil {
+		writeErr(w, http.StatusServiceUnavailable, "音频服务不可用")
+		return
+	}
+	if err := ab.RecordStart(req.Filename, req.Device); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeOK(w, nil)
+}
+
+// handleRecordStop POST /api/v1/record/stop
+func (s *Server) handleRecordStop(w http.ResponseWriter, r *http.Request) {
+	ab := s.pt.AudioBridge()
+	if ab == nil {
+		writeErr(w, http.StatusServiceUnavailable, "音频服务不可用")
+		return
+	}
+	if err := ab.RecordStop(); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeOK(w, nil)
+}
+
+// handleRecordPause POST /api/v1/record/pause
+func (s *Server) handleRecordPause(w http.ResponseWriter, r *http.Request) {
+	ab := s.pt.AudioBridge()
+	if ab == nil {
+		writeErr(w, http.StatusServiceUnavailable, "音频服务不可用")
+		return
+	}
+	if err := ab.RecordPause(); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeOK(w, nil)
+}
+
+// handleRecordStatus GET /api/v1/record/status
+func (s *Server) handleRecordStatus(w http.ResponseWriter, r *http.Request) {
+	ab := s.pt.AudioBridge()
+	if ab == nil {
+		writeErr(w, http.StatusServiceUnavailable, "音频服务不可用")
+		return
+	}
+	result, err := ab.RecordStatus()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeOK(w, result)
+}
+

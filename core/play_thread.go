@@ -1398,3 +1398,8 @@ func (pt *PlayThread) GetProgress() *models.PlayProgressEvent {
 func (pt *PlayThread) EventBus() *EventBus {
 	return pt.eventBus
 }
+
+// AudioBridge 返回音频桥接（API 层录音控制使用）
+func (pt *PlayThread) AudioBridge() *bridge.AudioBridge {
+	return pt.audioBridge
+}

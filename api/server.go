@@ -120,6 +120,12 @@ func (s *Server) buildRouter(cfg *infra.ServerConfig) chi.Router {
 			r.Post("/intercut/start", s.handleIntercutStart)
 			r.Post("/intercut/stop", s.handleIntercutStop)
 
+			// 录音
+			r.Post("/record/start", s.handleRecordStart)
+			r.Post("/record/stop", s.handleRecordStop)
+			r.Post("/record/pause", s.handleRecordPause)
+			r.Get("/record/status", s.handleRecordStatus)
+
 			// 播表
 			r.Post("/playlist/load", s.handleLoadPlaylist)
 

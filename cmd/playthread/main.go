@@ -133,9 +133,6 @@ func runApp(ctx context.Context, configPath string) {
 	audioExePath := filepath.Join(filepath.Dir(exePath), audioExeName)
 
 	pm := bridge.NewProcessManager(audioExePath, 5*time.Second)
-	pm.SetEventHandler(func(evt *bridge.IPCEvent) {
-		log.Info().Str("event", evt.Event).Msg("收到子进程事件")
-	})
 
 	if err := pm.Start(ctx); err != nil {
 		log.Fatal().Err(err).Msg("启动播放服务子进程失败")
@@ -175,6 +172,14 @@ func runApp(ctx context.Context, configPath string) {
 	sm := core.NewStateMachine()
 	eb := core.NewEventBus()
 	pt := core.NewPlayThread(cfg, sm, eb, pm.Bridge(), snapshotMgr)
+
+	// 子进程事件转发（含录音进度 → EventBus → WebSocket 广播）
+	pm.SetEventHandler(func(evt *bridge.IPCEvent) {
+		log.Debug().Str("event", evt.Event).Msg("收到子进程事件")
+		if evt.Event == bridge.EventRecordProgress {
+			eb.Emit(models.NewBroadcastEvent(models.EventRecordProgress, evt.Data))
+		}
+	})
 
 	// 播单接收回调：数据源 → PlayThread
 	dsMgr.OnPlaylist(func(pl *models.Playlist) {

@@ -381,27 +381,45 @@ func toDb(v float32) float32 {
 }
 
 // switchFile 文件滚动（对齐 C# SwitchRecordFile / CreateNewRecordFile）
+// 每个 MP3 文件都是独立完整流：关闭旧编码器 → 关闭旧文件 → 创建新编码器 → 创建新文件
 func (r *Recorder) switchFile() {
-	// 刷出当前编码器残余
+	// 刷出并关闭当前编码器（确保 MP3 流完整收尾）
 	if r.encoder != nil {
 		if data, err := r.encoder.Flush(); err == nil && len(data) > 0 {
 			if r.mp3File != nil {
 				r.mp3File.Write(data)
 			}
 		}
+		r.encoder.Close()
+		r.encoder = nil
 	}
 
 	// 关闭旧文件
 	if r.mp3File != nil {
 		r.mp3File.Sync()
 		r.mp3File.Close()
+		r.mp3File = nil
 	}
+
+	// 创建新 LAME 编码器（新文件 = 新独立 MP3 流）
+	enc, err := NewLameEncoder(recSampleRate, recChannels, recBitrate)
+	if err != nil {
+		log.Error().Err(err).Msg("录音文件滚动：重建 LAME 编码器失败，停止录音")
+		r.recording = false
+		globalRecorder.Store(nil)
+		return
+	}
+	r.encoder = enc
 
 	// 创建新文件
 	newName := fmt.Sprintf("%s_%d.mp3", r.baseName, r.fileIndex)
 	f, err := os.Create(newName)
 	if err != nil {
 		log.Error().Err(err).Str("file", newName).Msg("录音文件滚动失败")
+		r.encoder.Close()
+		r.encoder = nil
+		r.recording = false
+		globalRecorder.Store(nil)
 		return
 	}
 

@@ -20,6 +20,7 @@ import (
 type IPCServer struct {
 	mu         sync.Mutex   // 保护 stdout 写入
 	engine     *BassEngine  // BASS 引擎
+	recorder   *Recorder    // 录音器
 	stdin      io.Reader
 	stdout     io.Writer
 	shutdownCh chan struct{} // shutdown 信号通道
@@ -29,6 +30,7 @@ type IPCServer struct {
 func NewIPCServer(engine *BassEngine) *IPCServer {
 	return &IPCServer{
 		engine:     engine,
+		recorder:   NewRecorder(),
 		stdin:      os.Stdin,
 		stdout:     os.Stdout,
 		shutdownCh: make(chan struct{}),
@@ -128,6 +130,18 @@ func (s *IPCServer) handleRequest(req *bridge.IPCRequest) *bridge.IPCResponse {
 
 	case bridge.MethodShutdown:
 		return s.handleShutdown(req)
+
+	case bridge.MethodRecordStart:
+		return s.handleRecordStart(req)
+
+	case bridge.MethodRecordStop:
+		return s.handleRecordStop(req)
+
+	case bridge.MethodRecordPause:
+		return s.handleRecordPause(req)
+
+	case bridge.MethodRecordStatus:
+		return s.handleRecordStatus(req)
 
 	default:
 		return s.fail(req.ID, fmt.Sprintf("未知方法: %s", req.Method))
@@ -312,6 +326,62 @@ func (s *IPCServer) handleDeviceInfo(req *bridge.IPCRequest) *bridge.IPCResponse
 		result[i] = bridge.DeviceInfo{Index: i, Name: d.Name}
 	}
 	return s.success(req.ID, result)
+}
+
+// --- 录音处理器 ---
+
+func (s *IPCServer) handleRecordStart(req *bridge.IPCRequest) *bridge.IPCResponse {
+	var params bridge.RecordStartParams
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return s.fail(req.ID, fmt.Sprintf("参数解析失败: %v", err))
+	}
+
+	// 初始化录音设备（如果尚未初始化）
+	device := params.Device
+	if device == 0 {
+		device = -1
+	}
+	if err := s.recorder.InitDevice(device); err != nil {
+		log.Warn().Err(err).Int("device", device).Msg("录音设备初始化失败（可能已初始化）")
+	}
+
+	if err := s.recorder.Start(params.Filename); err != nil {
+		return s.fail(req.ID, err.Error())
+	}
+
+	// 启动进度推送 goroutine
+	go s.pushRecordProgress()
+
+	return s.success(req.ID, nil)
+}
+
+func (s *IPCServer) handleRecordStop(req *bridge.IPCRequest) *bridge.IPCResponse {
+	if err := s.recorder.Stop(); err != nil {
+		return s.fail(req.ID, err.Error())
+	}
+	return s.success(req.ID, nil)
+}
+
+func (s *IPCServer) handleRecordPause(req *bridge.IPCRequest) *bridge.IPCResponse {
+	if err := s.recorder.Pause(); err != nil {
+		return s.fail(req.ID, err.Error())
+	}
+	return s.success(req.ID, nil)
+}
+
+func (s *IPCServer) handleRecordStatus(req *bridge.IPCRequest) *bridge.IPCResponse {
+	progress := s.recorder.GetProgress()
+	return s.success(req.ID, &bridge.RecordStatusResult{
+		Status:      progress.Status,
+		DurationSec: progress.DurationSec,
+	})
+}
+
+// pushRecordProgress 从录音器 ProgressCh 消费进度并通过 IPC 推送给主控
+func (s *IPCServer) pushRecordProgress() {
+	for progress := range s.recorder.ProgressCh() {
+		s.PushEvent(bridge.EventRecordProgress, progress)
+	}
 }
 
 // --- 响应辅助 ---
