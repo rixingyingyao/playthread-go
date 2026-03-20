@@ -783,7 +783,7 @@ padding:
 
 server:
   host: "0.0.0.0"
-  port: 18800
+  port: 3036
   ws_path: "/ws/playback"
 
 monitor:

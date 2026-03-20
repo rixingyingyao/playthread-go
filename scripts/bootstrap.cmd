@@ -66,6 +66,6 @@ echo === Available Commands ===
 echo   go build ./...                                                    # Full build
 echo   go test -race -count=1 ./api/... ./core/... ./infra/... ./tests/... # Full test
 echo   go run ./cmd/playthread/ -config config.yaml                      # Start server
-echo   Open http://localhost:18800/dashboard                             # Dashboard
+echo   Open http://localhost:3036/dashboard                              # Dashboard
 echo.
 echo Environment ready!

@@ -97,9 +97,9 @@ REM --- Launch ---
 echo.
 echo [4/4] Starting Playthread ...
 echo ============================================
-echo   HTTP API:    http://localhost:18800
-echo   Dashboard:   http://localhost:18800/dashboard
-echo   WebSocket:   ws://localhost:18800/ws/playback
+echo   HTTP API:    http://localhost:3036
+echo   Dashboard:   http://localhost:3036/dashboard
+echo   WebSocket:   ws://localhost:3036/ws/playback
 echo   UDP:         127.0.0.1:18820
 echo ============================================
 echo   Press Ctrl+C to stop

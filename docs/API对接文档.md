@@ -1,7 +1,7 @@
 # Playthread-Go 前端对接文档
 
 > 本文档面向前端开发人员，覆盖所有 HTTP API、WebSocket 实时推送、数据模型定义。  
-> 基础地址：`http://<host>:18800`（端口可配置）
+> 基础地址：`http://<host>:3036`（端口可配置）
 
 ---
 
@@ -97,7 +97,7 @@ Authorization: Bearer <your-token>
 
 **WebSocket** 连接可通过 URL 参数传递 Token：
 ```
-ws://localhost:18800/ws/playback?token=<your-token>
+ws://localhost:3036/ws/playback?token=<your-token>
 ```
 > 注意：`token` 参数仅用于 WebSocket 握手，普通 HTTP 请求不支持此方式。
 
@@ -615,12 +615,12 @@ ws://localhost:18800/ws/playback?token=<your-token>
 ### 连接方式
 
 ```
-ws://<host>:18800/ws/playback
+ws://<host>:3036/ws/playback
 ```
 
 如果启用了 Token 认证：
 ```
-ws://<host>:18800/ws/playback?token=<your-token>
+ws://<host>:3036/ws/playback?token=<your-token>
 ```
 
 **连接参数：**
@@ -631,7 +631,7 @@ ws://<host>:18800/ws/playback?token=<your-token>
 **前端示例：**
 
 ```javascript
-const ws = new WebSocket('ws://localhost:18800/ws/playback?token=xxx');
+const ws = new WebSocket('ws://localhost:3036/ws/playback?token=xxx');
 
 ws.onmessage = function(event) {
   const msg = JSON.parse(event.data);
