@@ -265,76 +265,49 @@ canvas { width: 100% !important; height: 100% !important; }
     </div>
   </div>
 
-  <!-- 架构图 + 系统信息 -->
-  <div class="grid grid-2" style="margin-bottom:20px">
-    <div class="card">
-      <h2>🏗️ 系统架构图</h2>
-      <div class="section-desc">展示播出服务的模块组成和数据流转关系。左侧为主控进程，右侧为音频播放进程。</div>
-      <div class="arch-diagram">
-        <pre class="mermaid">
-graph TB
-  subgraph 主控进程["🖥️ 主控进程 playthread.exe"]
-    direction TB
-    Main["程序入口<br/>启动/信号处理/Windows服务"]
-    Core["播出编排器 PlayThread<br/>控制播出流程"]
-    SM["状态机 StateMachine<br/>管理六种播出状态"]
-    FTM["定时任务 FixTimeManager<br/>准时播出指定节目"]
-    BM["垫乐管理 BlankManager<br/>空闲时自动播放垫乐"]
-    IM["插播管理 IntercutManager<br/>紧急插播/恢复"]
-    CH["通道保持 ChannelHold<br/>防止播出断流"]
-    API["接口层 API<br/>HTTP + WebSocket + UDP"]
-    Bridge["进程桥接 Bridge<br/>管理音频子进程"]
-    DSM["数据源管理<br/>云端/本地自动切换"]
-    FC["素材缓存<br/>自动下载音频文件"]
-    OS_["离线暂存<br/>断网时保存数据"]
-    MON["运行监控<br/>崩溃检测/性能统计"]
-    DB["本地数据库 SQLite<br/>节目单/播出记录"]
+  <!-- 架构图（独占一行，横向布局） -->
+  <div class="card full-width" style="margin-bottom:20px">
+    <h2>🏗️ 系统架构图</h2>
+    <div class="section-desc">展示播出服务的整体架构：左侧为主控进程负责业务逻辑，右侧为音频进程负责实际播放，两者通过进程通信连接。</div>
+    <div class="arch-diagram">
+      <pre class="mermaid">
+graph LR
+  Client["📱 前端工作站"]
+  Cloud["☁️ 云端平台"]
+  Center["🏢 本地中心"]
 
-    Main --> Core
-    Core --> SM
-    Core --> FTM
-    Core --> BM
-    Core --> IM
-    Core --> CH
-    Main --> API
-    Core --> Bridge
-    Main --> DSM
-    DSM --> FC
-    DSM --> OS_
-    Main --> MON
-    Core --> DB
+  subgraph 主控["🖥️ 主控进程 playthread.exe"]
+    API["🌐 接口层\nHTTP · WebSocket · UDP"]
+    Core["🎯 播出编排器\n状态机 · 定时播出\n垫乐 · 插播 · 通道保持"]
+    DSM["📡 数据源管理\n云端/本地自动切换\n素材缓存 · 离线暂存"]
+    DB["💿 本地数据库\nSQLite"]
+    MON["📊 运行监控"]
   end
 
-  subgraph 音频进程["🎵 音频进程 audio-service.exe"]
-    direction TB
-    IPC["进程通信 IPC<br/>JSON Line 协议"]
-    BASS["音频引擎 BASS<br/>音频解码与播放"]
-    VC["虚拟通道<br/>12路音频通道拓扑"]
-    LM["音频电平表<br/>实时音量监测"]
-    REC["录音模块<br/>播出音频录制"]
-    CM["通道矩阵<br/>音频路由混音"]
-
-    IPC --> BASS
-    BASS --> VC
-    BASS --> LM
-    BASS --> REC
-    BASS --> CM
+  subgraph 音频["🎵 音频进程 audio-service.exe"]
+    BASS["🔊 BASS 音频引擎\n12路虚拟通道\n音频电平 · 录音 · 混音"]
   end
 
-  Bridge -- "标准输入输出<br/>JSON Line 通信" --> IPC
-  DSM -- "HTTP / WebSocket" --> Cloud["☁️ 云端 SAAS 平台"]
-  DSM -- "HTTP" --> Center["🏢 本地中心服务器"]
-  API -- "REST / WebSocket" --> Client["📱 前端工作站"]
+  Client -- "REST / WS" --> API
+  Cloud -- "HTTP / WS" --> DSM
+  Center -- "HTTP" --> DSM
+  API --> Core
+  Core --> DB
+  DSM --> Core
+  Core -- "JSON Line\n进程通信" --> BASS
+  Core --> MON
 
-  style 主控进程 fill:#1e293b,stroke:#38bdf8,color:#e2e8f0
-  style 音频进程 fill:#1e293b,stroke:#22c55e,color:#e2e8f0
+  style 主控 fill:#1e293b,stroke:#38bdf8,color:#e2e8f0
+  style 音频 fill:#1e293b,stroke:#22c55e,color:#e2e8f0
   style Cloud fill:#0f172a,stroke:#a78bfa,color:#e2e8f0
   style Center fill:#0f172a,stroke:#fb923c,color:#e2e8f0
   style Client fill:#0f172a,stroke:#38bdf8,color:#e2e8f0
-        </pre>
-      </div>
+      </pre>
     </div>
+  </div>
 
+  <!-- 系统信息 -->
+  <div class="grid grid-2" style="margin-bottom:20px">
     <div class="card">
       <h2>⚙️ 系统信息</h2>
       <div class="section-desc">当前服务的运行环境和基本参数</div>
@@ -350,8 +323,10 @@ graph TB
       <h2 style="margin-top:24px">💾 内存分布详情</h2>
       <div class="section-desc">各类内存的使用量一览，越短表示用量越少</div>
       <div id="memoryBars" style="margin-top:8px"></div>
+    </div>
 
-      <h2 style="margin-top:24px">🌐 数据源状态</h2>
+    <div class="card">
+      <h2>🌐 数据源状态</h2>
       <div class="section-desc">播单数据的获取来源及连接状态</div>
       <div class="info-grid" id="dsInfoGrid">
         <div class="info-item"><div class="info-label">当前数据源</div><div class="info-value" id="dsActive">-</div></div>
