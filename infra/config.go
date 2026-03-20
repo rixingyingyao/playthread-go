@@ -9,13 +9,16 @@ import (
 
 // Config 全局配置
 type Config struct {
-	Playback PlaybackConfig `yaml:"playback"`
-	Audio    AudioConfig    `yaml:"audio"`
-	Padding  PaddingConfig  `yaml:"padding"`
-	Server   ServerConfig   `yaml:"server"`
-	Monitor  MonitorConfig  `yaml:"monitor"`
-	Log      LogConfig      `yaml:"log"`
-	DB       DBConfig       `yaml:"db"`
+	Playback   PlaybackConfig   `yaml:"playback"`
+	Audio      AudioConfig      `yaml:"audio"`
+	Padding    PaddingConfig    `yaml:"padding"`
+	Server     ServerConfig     `yaml:"server"`
+	Monitor    MonitorConfig    `yaml:"monitor"`
+	Log        LogConfig        `yaml:"log"`
+	DB         DBConfig         `yaml:"db"`
+	DataSource DataSourceConfig `yaml:"datasource"`
+	FileCache  FileCacheConfig  `yaml:"file_cache"`
+	Offline    OfflineStoreConfig `yaml:"offline"`
 }
 
 // PlaybackConfig 播出相关配置
@@ -146,6 +149,9 @@ func DefaultConfig() *Config {
 		DB: DBConfig{
 			Path: "data/playthread.db",
 		},
+		DataSource: DefaultDataSourceConfig(),
+		FileCache:  DefaultFileCacheConfig(),
+		Offline:    DefaultOfflineStoreConfig(),
 	}
 }
 
