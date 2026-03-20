@@ -1071,15 +1071,25 @@ func (pt *PlayThread) Next() bool {
 	return pt.playNextClip(true)
 }
 
-// Suspend 挂起播出
+// Suspend 挂起播出：暂停当前主通道音频 + 阻止自动推进
 func (pt *PlayThread) Suspend() {
 	pt.suspended.Store(true)
-	log.Info().Msg("播出已挂起")
+	if pt.audioBridge != nil {
+		if err := pt.audioBridge.Pause(int(models.ChanMainOut), pt.cfg.Audio.FadeOutMs); err != nil {
+			log.Warn().Err(err).Msg("暂停音频失败，仅挂起推进")
+		}
+	}
+	log.Info().Msg("播出已暂停")
 }
 
-// Resume 恢复播出
+// Resume 恢复播出：恢复主通道音频 + 允许自动推进
 func (pt *PlayThread) Resume() {
 	pt.suspended.Store(false)
+	if pt.audioBridge != nil {
+		if err := pt.audioBridge.Resume(int(models.ChanMainOut)); err != nil {
+			log.Warn().Err(err).Msg("恢复音频失败，仅恢复推进")
+		}
+	}
 	log.Info().Msg("播出已恢复")
 }
 

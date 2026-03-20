@@ -144,6 +144,9 @@ type ipLimiter struct {
 	windowAt time.Time
 }
 
+const rateLimiterTTL = 60 * time.Second // IP 记录过期时间
+const rateLimiterMaxEntries = 10000     // 最大 IP 记录数
+
 // RateLimiter 基于 IP 的每秒请求限流中间件
 type RateLimiter struct {
 	mu      sync.Mutex
@@ -169,6 +172,16 @@ func (rl *RateLimiter) Handler(next http.Handler) http.Handler {
 
 		rl.mu.Lock()
 		now := time.Now()
+
+		// 惰性清理：淘汰超过 TTL 的旧记录
+		if len(rl.clients) > rateLimiterMaxEntries/2 {
+			for k, v := range rl.clients {
+				if now.Sub(v.windowAt) > rateLimiterTTL {
+					delete(rl.clients, k)
+				}
+			}
+		}
+
 		lim, ok := rl.clients[ip]
 		if !ok || now.Sub(lim.windowAt) >= time.Second {
 			rl.clients[ip] = &ipLimiter{count: 1, windowAt: now}
@@ -185,4 +198,11 @@ func (rl *RateLimiter) Handler(next http.Handler) http.Handler {
 		rl.mu.Unlock()
 		next.ServeHTTP(w, r)
 	})
+}
+
+// Size 返回当前记录的 IP 数量（测试用）
+func (rl *RateLimiter) Size() int {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	return len(rl.clients)
 }

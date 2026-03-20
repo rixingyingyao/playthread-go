@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -532,5 +533,49 @@ func TestRateLimiter_Exceed(t *testing.T) {
 	handler.ServeHTTP(rr, req)
 	if rr.Code != http.StatusTooManyRequests {
 		t.Errorf("超限请求期望 429，得到 %d", rr.Code)
+	}
+}
+
+func TestRateLimiter_ExpiryCleanup(t *testing.T) {
+	rl := NewRateLimiter(100)
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := rl.Handler(inner)
+
+	// 创建大量不同 IP 的请求以触发清理阈值
+	for i := 0; i < rateLimiterMaxEntries/2+10; i++ {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.RemoteAddr = fmt.Sprintf("10.0.%d.%d:12345", i/256, i%256)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+	}
+
+	sizeBefore := rl.Size()
+	if sizeBefore < rateLimiterMaxEntries/2 {
+		t.Fatalf("期望至少 %d 条记录，实际 %d", rateLimiterMaxEntries/2, sizeBefore)
+	}
+
+	// 手动把所有记录的 windowAt 设为过期
+	rl.mu.Lock()
+	past := time.Now().Add(-2 * rateLimiterTTL)
+	for _, v := range rl.clients {
+		v.windowAt = past
+	}
+	rl.mu.Unlock()
+
+	// 再发一次请求触发惰性清理
+	req := httptest.NewRequest("GET", "/", nil)
+	req.RemoteAddr = "192.168.99.99:12345"
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	sizeAfter := rl.Size()
+	if sizeAfter >= sizeBefore {
+		t.Errorf("清理后记录数应减少，之前 %d，之后 %d", sizeBefore, sizeAfter)
+	}
+	// 旧记录应被清除，只留新请求的 1 条
+	if sizeAfter > 1 {
+		t.Errorf("期望清理后仅剩 1 条，实际 %d", sizeAfter)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,9 +21,13 @@ import (
 
 // mockIPC 模拟 IPC 子进程：读取请求并回写成功响应
 // 对 position 请求返回指定位置；其余方法返回空 data。
+// 记录 pause/resume 调用以便测试验证。
 type mockIPC struct {
-	posMs int
-	durMs int
+	posMs    int
+	durMs    int
+	paused   atomic.Bool
+	pauseCnt atomic.Int32
+	resumeCnt atomic.Int32
 }
 
 func (m *mockIPC) serve(r io.Reader, w io.Writer) {
@@ -41,12 +46,19 @@ func (m *mockIPC) serve(r io.Reader, w io.Writer) {
 		var resp bridge.IPCResponse
 		resp.ID = req.ID
 
-		if req.Method == "position" {
+		switch req.Method {
+		case "position":
 			data, _ := json.Marshal(bridge.PositionResult{
 				PositionMs: m.posMs,
 				DurationMs: m.durMs,
 			})
 			resp.Data = data
+		case "pause":
+			m.paused.Store(true)
+			m.pauseCnt.Add(1)
+		case "resume":
+			m.paused.Store(false)
+			m.resumeCnt.Add(1)
 		}
 
 		out, _ := json.Marshal(resp)
@@ -56,8 +68,8 @@ func (m *mockIPC) serve(r io.Reader, w io.Writer) {
 }
 
 // newMockAudioBridge 创建基于管道的 mock AudioBridge。
-// 返回 bridge 实例和关闭函数。
-func newMockAudioBridge(posMs, durMs int) (*bridge.AudioBridge, func()) {
+// 返回 bridge 实例、mock 实例（可观测 pause/resume）和关闭函数。
+func newMockAudioBridge(posMs, durMs int) (*bridge.AudioBridge, *mockIPC, func()) {
 	// stdinR: mock 从中读取请求; stdinW: bridge 写入请求
 	stdinR, stdinW := io.Pipe()
 	// stdoutR: bridge 从中读取响应; stdoutW: mock 写入响应
@@ -74,7 +86,7 @@ func newMockAudioBridge(posMs, durMs int) (*bridge.AudioBridge, func()) {
 		stdinR.Close()
 		stdoutR.Close()
 	}
-	return ab, cleanup
+	return ab, mock, cleanup
 }
 
 // --- 测试辅助 ---
@@ -121,7 +133,7 @@ func testPlaylist(n int) *models.Playlist {
 // startPlayThread 创建并启动 PlayThread，返回 pt、cancel、cleanup。
 func startPlayThread(t *testing.T, pl *models.Playlist) (*PlayThread, context.CancelFunc, func()) {
 	t.Helper()
-	ab, abCleanup := newMockAudioBridge(5000, 30000)
+	ab, _, abCleanup := newMockAudioBridge(5000, 30000)
 	cfg := testConfig()
 	sm := NewStateMachine()
 	eb := NewEventBus()
@@ -591,4 +603,39 @@ func TestPlayThread_DelayStartErrors(t *testing.T) {
 		ReturnTime: time.Now().Add(-1 * time.Hour),
 	})
 	assert.Error(t, err, "过期时间应报错")
+}
+
+// TestPlayThread_PauseResume_AudioBridge 验证 pause 会暂停音频，play 会恢复音频
+func TestPlayThread_PauseResume_AudioBridge(t *testing.T) {
+	ab, mock, abCleanup := newMockAudioBridge(5000, 30000)
+	defer abCleanup()
+
+	cfg := testConfig()
+	sm := NewStateMachine()
+	eb := NewEventBus()
+	pt := NewPlayThread(cfg, sm, eb, ab, nil)
+	pt.SetPlaylist(testPlaylist(3))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() { cancel(); pt.Wait() }()
+	pt.Run(ctx)
+	drainBroadcast(ctx, pt.eventBus)
+
+	require.NoError(t, pt.ChangeStatus(models.StatusAuto, "test"))
+	waitForStatus(t, pt.stateMachine, models.StatusAuto, time.Second)
+	time.Sleep(200 * time.Millisecond)
+
+	// Pause — 应调用 AudioBridge.Pause 并设 suspended
+	pt.Suspend()
+	time.Sleep(100 * time.Millisecond)
+	assert.True(t, pt.IsSuspended(), "Suspend 后应为挂起状态")
+	assert.True(t, mock.paused.Load(), "Suspend 后 mock 应记录 paused=true")
+	assert.Equal(t, int32(1), mock.pauseCnt.Load(), "Pause 应被调用 1 次")
+
+	// Resume — 应调用 AudioBridge.Resume 并清 suspended
+	pt.Resume()
+	time.Sleep(100 * time.Millisecond)
+	assert.False(t, pt.IsSuspended(), "Resume 后应为非挂起状态")
+	assert.False(t, mock.paused.Load(), "Resume 后 mock 应记录 paused=false")
+	assert.Equal(t, int32(1), mock.resumeCnt.Load(), "Resume 应被调用 1 次")
 }
