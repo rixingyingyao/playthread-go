@@ -167,6 +167,13 @@ func (dm *DataSourceManager) SetInfra(fc *FileCache, os_ *OfflineStore) {
 
 // Run 启动心跳检测 + 播单轮询循环（阻塞，需在 goroutine 中调用）
 func (dm *DataSourceManager) Run(ctx context.Context) {
+	// 两个 URL 都未配置时，不启动心跳和轮询，避免持续报错
+	if dm.cfg.CloudURL == "" && dm.cfg.CenterURL == "" {
+		log.Warn().Msg("DataSourceManager: 云端和本地中心 URL 均未配置，心跳和播单轮询已跳过")
+		<-ctx.Done()
+		return
+	}
+
 	hbTicker := time.NewTicker(dm.cfg.HeartbeatInterval)
 	defer hbTicker.Stop()
 

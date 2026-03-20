@@ -122,13 +122,18 @@ func Recoverer(next http.Handler) http.Handler {
 func TokenAuth(token string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got := ""
 			auth := r.Header.Get("Authorization")
 			const prefix = "Bearer "
-			if !strings.HasPrefix(auth, prefix) {
+			if strings.HasPrefix(auth, prefix) {
+				got = auth[len(prefix):]
+			} else {
+				got = r.URL.Query().Get("token")
+			}
+			if got == "" {
 				http.Error(w, `{"code":401,"message":"missing authorization"}`, http.StatusUnauthorized)
 				return
 			}
-			got := auth[len(prefix):]
 			if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
 				http.Error(w, `{"code":401,"message":"invalid token"}`, http.StatusUnauthorized)
 				return

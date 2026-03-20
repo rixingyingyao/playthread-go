@@ -12,7 +12,7 @@ import (
 )
 
 // ProcessManager 管理播放服务子进程的生命周期。
-// 负责启动、监控、崩溃重启（指数退避）。
+// 负责启动、监控、崩溃重启（指数退避，最多重试 maxCrashRetries 次后放弃）。
 type ProcessManager struct {
 	exePath     string        // 子进程可执行文件路径
 	mu          sync.Mutex
@@ -26,6 +26,8 @@ type ProcessManager struct {
 	stopping    bool          // 是否正在主动停止
 	wg          sync.WaitGroup // 追踪辅助 goroutine（drainStderr, forwardEvents, watchProcess）
 }
+
+const maxCrashRetries = 10 // 连续崩溃超过此次数后放弃重启
 
 // NewProcessManager 创建子进程管理器
 func NewProcessManager(exePath string, ipcTimeout time.Duration) *ProcessManager {
@@ -178,6 +180,11 @@ func (pm *ProcessManager) watchProcess(parentCtx context.Context) {
 	pm.mu.Unlock()
 
 	log.Error().Err(err).Int("crash_count", count).Msg("播放服务子进程崩溃")
+
+	if count >= maxCrashRetries {
+		log.Error().Int("crash_count", count).Msg("播放服务连续崩溃次数超限，已放弃自动重启。请检查 audio-service 可执行文件和音频驱动。")
+		return
+	}
 
 	// 计算退避延迟
 	delay := pm.backoffDelay(count)

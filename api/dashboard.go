@@ -108,12 +108,12 @@ const dashboardHTML = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Playthread-Go 监控仪表盘</title>
+<title>Playthread-Go 播出服务 · 监控面板</title>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Microsoft YaHei', 'Segoe UI', sans-serif;
   background: #0f172a; color: #e2e8f0; min-height: 100vh;
 }
 .header {
@@ -121,22 +121,23 @@ body {
   padding: 20px 32px; border-bottom: 1px solid #475569;
   display: flex; justify-content: space-between; align-items: center;
 }
-.header h1 { font-size: 24px; font-weight: 600; color: #38bdf8; }
-.header .meta { font-size: 13px; color: #94a3b8; }
+.header h1 { font-size: 22px; font-weight: 600; color: #38bdf8; }
+.header .subtitle { font-size: 13px; color: #64748b; margin-top: 2px; }
+.header .meta { font-size: 13px; color: #94a3b8; text-align: right; }
 .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
 .grid { display: grid; gap: 20px; }
 .grid-2 { grid-template-columns: 1fr 1fr; }
-.grid-3 { grid-template-columns: 1fr 1fr 1fr; }
 .grid-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
 .card {
   background: #1e293b; border-radius: 12px; padding: 20px;
   border: 1px solid #334155; transition: border-color 0.2s;
 }
 .card:hover { border-color: #475569; }
-.card h2 { font-size: 14px; color: #94a3b8; margin-bottom: 16px; text-transform: uppercase; letter-spacing: 1px; }
+.card h2 { font-size: 14px; color: #94a3b8; margin-bottom: 12px; letter-spacing: 0.5px; }
 .metric-value { font-size: 36px; font-weight: 700; color: #f1f5f9; }
 .metric-unit { font-size: 14px; color: #64748b; margin-left: 4px; }
 .metric-label { font-size: 12px; color: #64748b; margin-top: 4px; }
+.metric-hint { font-size: 11px; color: #475569; margin-top: 6px; line-height: 1.4; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
 .status-ok { background: #22c55e; box-shadow: 0 0 6px #22c55e40; }
 .status-warn { background: #eab308; box-shadow: 0 0 6px #eab30840; }
@@ -151,21 +152,37 @@ pre.goroutine-stack {
 }
 .chart-container { position: relative; height: 200px; }
 canvas { width: 100% !important; height: 100% !important; }
-.tab-bar { display: flex; gap: 8px; margin-bottom: 16px; }
-.tab-btn {
-  padding: 6px 16px; border-radius: 6px; border: 1px solid #334155;
-  background: transparent; color: #94a3b8; cursor: pointer; font-size: 13px;
-}
-.tab-btn.active { background: #38bdf8; color: #0f172a; border-color: #38bdf8; }
 .progress-bar {
   height: 8px; border-radius: 4px; background: #334155; overflow: hidden; margin-top: 8px;
 }
 .progress-fill { height: 100%; border-radius: 4px; transition: width 0.5s; }
-.sys-info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.sys-info-item { padding: 8px 12px; background: #0f172a; border-radius: 6px; }
-.sys-info-label { font-size: 11px; color: #64748b; }
-.sys-info-value { font-size: 14px; color: #e2e8f0; margin-top: 2px; }
-@media (max-width: 900px) { .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; } }
+.info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.info-item { padding: 8px 12px; background: #0f172a; border-radius: 6px; }
+.info-label { font-size: 11px; color: #64748b; }
+.info-value { font-size: 14px; color: #e2e8f0; margin-top: 2px; }
+.help-section {
+  background: #1e293b; border: 1px solid #334155; border-radius: 12px;
+  padding: 20px; margin-bottom: 20px;
+}
+.help-section summary {
+  cursor: pointer; font-size: 14px; color: #38bdf8; font-weight: 500;
+  list-style: none; display: flex; align-items: center; gap: 8px;
+}
+.help-section summary::before { content: '💡'; }
+.help-section .help-content { margin-top: 12px; }
+.help-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 8px; }
+.help-item { padding: 10px 14px; background: #0f172a; border-radius: 8px; border-left: 3px solid #38bdf8; }
+.help-item.green { border-left-color: #22c55e; }
+.help-item.purple { border-left-color: #a78bfa; }
+.help-item.orange { border-left-color: #fb923c; }
+.help-item dt { font-size: 13px; color: #e2e8f0; font-weight: 500; margin-bottom: 4px; }
+.help-item dd { font-size: 12px; color: #94a3b8; line-height: 1.5; }
+.ds-status-label { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; }
+.ds-normal { background: #22c55e20; color: #22c55e; }
+.ds-fallback { background: #eab30820; color: #eab308; }
+.ds-offline { background: #ef444420; color: #ef4444; }
+.section-desc { font-size: 12px; color: #64748b; margin-bottom: 12px; }
+@media (max-width: 900px) { .grid-2, .grid-4, .help-grid { grid-template-columns: 1fr; } }
 #goroutineFilter { width: 100%; padding: 8px 12px; border-radius: 6px; border: 1px solid #334155;
   background: #0f172a; color: #e2e8f0; font-size: 13px; margin-bottom: 12px; }
 </style>
@@ -173,63 +190,105 @@ canvas { width: 100% !important; height: 100% !important; }
 <body>
 
 <div class="header">
-  <h1>🎵 Playthread-Go 监控仪表盘</h1>
+  <div>
+    <h1>🎵 广播播出服务 · 监控面板</h1>
+    <div class="subtitle">Playthread-Go — 轻量化广播播出端后台服务</div>
+  </div>
   <div class="meta">
-    <span id="headerStatus"><span class="status-dot status-ok"></span>运行中</span>
-    &nbsp;|&nbsp; 运行时间: <span id="headerUptime">-</span>
-    &nbsp;|&nbsp; 刷新间隔: 2s
+    <div><span id="headerStatus"><span class="status-dot status-ok"></span>服务运行中</span></div>
+    <div style="margin-top:4px">已运行: <span id="headerUptime">-</span> &nbsp;|&nbsp; 每 2 秒自动刷新</div>
   </div>
 </div>
 
 <div class="container">
+
+  <!-- 数据说明（可折叠） -->
+  <details class="help-section" open>
+    <summary>如何看这些数据？点击展开/收起说明</summary>
+    <div class="help-content">
+      <p style="font-size:13px;color:#94a3b8;margin-bottom:8px">此面板实时显示播出服务的运行状态。下方是各指标的含义，方便您判断服务是否正常：</p>
+      <div class="help-grid">
+        <dl class="help-item">
+          <dt>📊 并发任务数（Goroutines）</dt>
+          <dd>当前服务内同时运行的任务数量。正常范围 20~100。如果持续增长不下降，可能存在任务泄漏，需要关注。</dd>
+        </dl>
+        <dl class="help-item green">
+          <dt>💾 堆内存（Heap）</dt>
+          <dd>服务当前使用的主要内存。正常播出状态一般在 5~50 MB。如果持续增长超过 200 MB 且不回落，可能存在内存泄漏。</dd>
+        </dl>
+        <dl class="help-item purple">
+          <dt>📚 栈内存（Stack）</dt>
+          <dd>每个并发任务独立使用的内存空间。通常很小（&lt;5 MB），不需要特别关注。</dd>
+        </dl>
+        <dl class="help-item orange">
+          <dt>♻️ 垃圾回收（GC）</dt>
+          <dd>系统自动清理不再使用的内存的次数。次数增长是正常的。关注"累计暂停"时间——如果超过 1000 ms 说明 GC 压力较大。</dd>
+        </dl>
+        <dl class="help-item">
+          <dt>🌐 数据源状态</dt>
+          <dd>显示当前从哪里获取播单数据。正常时使用"云端"，当云端不可达时自动降级到"本地中心"。如果两者都未配置 URL，则显示未配置。</dd>
+        </dl>
+        <dl class="help-item green">
+          <dt>📈 趋势图表</dt>
+          <dd>显示最近 2 分钟（60 次采样 × 2 秒间隔）的变化趋势。趋势平稳说明服务运行稳定，波动大或持续上升需要关注。</dd>
+        </dl>
+      </div>
+    </div>
+  </details>
+
   <!-- 概览指标卡 -->
   <div class="grid grid-4" style="margin-bottom:20px">
     <div class="card">
-      <h2>Goroutines</h2>
+      <h2>📊 并发任务数</h2>
       <div class="metric-value" id="metricGoroutines">-</div>
-      <div class="metric-label">活跃协程数</div>
+      <div class="metric-label">当前活跃任务</div>
+      <div class="metric-hint" id="goroutineHint">正常范围: 20~100</div>
     </div>
     <div class="card">
-      <h2>堆内存</h2>
+      <h2>💾 堆内存使用</h2>
       <div><span class="metric-value" id="metricHeap">-</span><span class="metric-unit">MB</span></div>
       <div class="progress-bar"><div class="progress-fill" id="heapBar" style="width:0;background:#38bdf8"></div></div>
-      <div class="metric-label">HeapAlloc / HeapSys</div>
+      <div class="metric-label">已用 / 已申请</div>
+      <div class="metric-hint">蓝色条越短越好，表示内存利用率</div>
     </div>
     <div class="card">
-      <h2>栈内存</h2>
+      <h2>📚 栈内存使用</h2>
       <div><span class="metric-value" id="metricStack">-</span><span class="metric-unit">MB</span></div>
-      <div class="metric-label">StackInUse</div>
+      <div class="metric-label">各任务的独立内存</div>
+      <div class="metric-hint">通常 &lt; 5 MB，无需关注</div>
     </div>
     <div class="card">
-      <h2>GC 统计</h2>
+      <h2>♻️ 垃圾回收</h2>
       <div><span class="metric-value" id="metricGC">-</span><span class="metric-unit">次</span></div>
       <div class="metric-label">累计暂停: <span id="metricGCPause">-</span> ms</div>
+      <div class="metric-hint">暂停 &lt; 100ms 为正常</div>
     </div>
   </div>
 
   <!-- 架构图 + 系统信息 -->
   <div class="grid grid-2" style="margin-bottom:20px">
     <div class="card">
-      <h2>系统架构</h2>
+      <h2>🏗️ 系统架构图</h2>
+      <div class="section-desc">展示播出服务的模块组成和数据流转关系。左侧为主控进程，右侧为音频播放进程。</div>
       <div class="arch-diagram">
         <pre class="mermaid">
 graph TB
-  subgraph 主控进程["🖥️ playthread.exe (CGO_ENABLED=0)"]
+  subgraph 主控进程["🖥️ 主控进程 playthread.exe"]
     direction TB
-    Main["main.go<br/>入口/信号/服务模式"]
-    Core["core/<br/>PlayThread 编排器"]
-    SM["StateMachine<br/>六状态机"]
-    FTM["FixTimeManager<br/>定时任务"]
-    BM["BlankManager<br/>垫乐填充"]
-    IM["IntercutManager<br/>插播管理"]
-    CH["ChannelHold<br/>通道保持"]
-    API["api/<br/>HTTP+WS+UDP"]
-    Bridge["bridge/<br/>ProcessManager+IPC"]
-    DSM["infra/<br/>DataSourceManager"]
-    FC["FileCache<br/>素材缓存"]
-    OS_["OfflineStore<br/>断网暂存"]
-    MON["Monitor<br/>运行时监控"]
-    DB["db/<br/>SQLite"]
+    Main["程序入口<br/>启动/信号处理/Windows服务"]
+    Core["播出编排器 PlayThread<br/>控制播出流程"]
+    SM["状态机 StateMachine<br/>管理六种播出状态"]
+    FTM["定时任务 FixTimeManager<br/>准时播出指定节目"]
+    BM["垫乐管理 BlankManager<br/>空闲时自动播放垫乐"]
+    IM["插播管理 IntercutManager<br/>紧急插播/恢复"]
+    CH["通道保持 ChannelHold<br/>防止播出断流"]
+    API["接口层 API<br/>HTTP + WebSocket + UDP"]
+    Bridge["进程桥接 Bridge<br/>管理音频子进程"]
+    DSM["数据源管理<br/>云端/本地自动切换"]
+    FC["素材缓存<br/>自动下载音频文件"]
+    OS_["离线暂存<br/>断网时保存数据"]
+    MON["运行监控<br/>崩溃检测/性能统计"]
+    DB["本地数据库 SQLite<br/>节目单/播出记录"]
 
     Main --> Core
     Core --> SM
@@ -246,14 +305,14 @@ graph TB
     Core --> DB
   end
 
-  subgraph 播放服务["🎵 audio-service.exe (CGO_ENABLED=1)"]
+  subgraph 音频进程["🎵 音频进程 audio-service.exe"]
     direction TB
-    IPC["IPC Server<br/>JSON Line"]
-    BASS["BASS Engine<br/>LockOSThread"]
-    VC["VirtualChannel<br/>12通道拓扑"]
-    LM["LevelMeter<br/>音频电平"]
-    REC["Recorder<br/>音频录制"]
-    CM["ChannelMatrix<br/>通道矩阵"]
+    IPC["进程通信 IPC<br/>JSON Line 协议"]
+    BASS["音频引擎 BASS<br/>音频解码与播放"]
+    VC["虚拟通道<br/>12路音频通道拓扑"]
+    LM["音频电平表<br/>实时音量监测"]
+    REC["录音模块<br/>播出音频录制"]
+    CM["通道矩阵<br/>音频路由混音"]
 
     IPC --> BASS
     BASS --> VC
@@ -262,13 +321,13 @@ graph TB
     BASS --> CM
   end
 
-  Bridge -- "stdin/stdout<br/>JSON Line" --> IPC
-  DSM -- "HTTP/WS" --> Cloud["☁️ 云端 SAAS"]
-  DSM -- "HTTP" --> Center["🏢 本地中心"]
-  API -- "REST/WS" --> Client["📱 工作中心前端"]
+  Bridge -- "标准输入输出<br/>JSON Line 通信" --> IPC
+  DSM -- "HTTP / WebSocket" --> Cloud["☁️ 云端 SAAS 平台"]
+  DSM -- "HTTP" --> Center["🏢 本地中心服务器"]
+  API -- "REST / WebSocket" --> Client["📱 前端工作站"]
 
   style 主控进程 fill:#1e293b,stroke:#38bdf8,color:#e2e8f0
-  style 播放服务 fill:#1e293b,stroke:#22c55e,color:#e2e8f0
+  style 音频进程 fill:#1e293b,stroke:#22c55e,color:#e2e8f0
   style Cloud fill:#0f172a,stroke:#a78bfa,color:#e2e8f0
   style Center fill:#0f172a,stroke:#fb923c,color:#e2e8f0
   style Client fill:#0f172a,stroke:#38bdf8,color:#e2e8f0
@@ -277,39 +336,44 @@ graph TB
     </div>
 
     <div class="card">
-      <h2>系统信息</h2>
-      <div class="sys-info-grid" id="sysInfoGrid">
-        <div class="sys-info-item"><div class="sys-info-label">Go 版本</div><div class="sys-info-value" id="siGoVer">-</div></div>
-        <div class="sys-info-item"><div class="sys-info-label">平台</div><div class="sys-info-value" id="siPlatform">-</div></div>
-        <div class="sys-info-item"><div class="sys-info-label">CPU 核心</div><div class="sys-info-value" id="siCPU">-</div></div>
-        <div class="sys-info-item"><div class="sys-info-label">编译器</div><div class="sys-info-value" id="siCompiler">-</div></div>
-        <div class="sys-info-item"><div class="sys-info-label">运行时间</div><div class="sys-info-value" id="siUptime">-</div></div>
-        <div class="sys-info-item"><div class="sys-info-label">Goroutines</div><div class="sys-info-value" id="siGoroutines">-</div></div>
+      <h2>⚙️ 系统信息</h2>
+      <div class="section-desc">当前服务的运行环境和基本参数</div>
+      <div class="info-grid" id="sysInfoGrid">
+        <div class="info-item"><div class="info-label">Go 版本</div><div class="info-value" id="siGoVer">-</div></div>
+        <div class="info-item"><div class="info-label">运行平台</div><div class="info-value" id="siPlatform">-</div></div>
+        <div class="info-item"><div class="info-label">CPU 核心数</div><div class="info-value" id="siCPU">-</div></div>
+        <div class="info-item"><div class="info-label">编译器</div><div class="info-value" id="siCompiler">-</div></div>
+        <div class="info-item"><div class="info-label">已运行时间</div><div class="info-value" id="siUptime">-</div></div>
+        <div class="info-item"><div class="info-label">当前任务数</div><div class="info-value" id="siGoroutines">-</div></div>
       </div>
 
-      <h2 style="margin-top:24px">内存分布</h2>
+      <h2 style="margin-top:24px">💾 内存分布详情</h2>
+      <div class="section-desc">各类内存的使用量一览，越短表示用量越少</div>
       <div id="memoryBars" style="margin-top:8px"></div>
 
-      <h2 style="margin-top:24px">数据源状态</h2>
-      <div class="sys-info-grid" id="dsInfoGrid">
-        <div class="sys-info-item"><div class="sys-info-label">活跃源</div><div class="sys-info-value" id="dsActive">-</div></div>
-        <div class="sys-info-item"><div class="sys-info-label">降级状态</div><div class="sys-info-value" id="dsState">-</div></div>
-        <div class="sys-info-item"><div class="sys-info-label">云端失败</div><div class="sys-info-value" id="dsFail">-</div></div>
-        <div class="sys-info-item"><div class="sys-info-label">可回切</div><div class="sys-info-value" id="dsSwitch">-</div></div>
+      <h2 style="margin-top:24px">🌐 数据源状态</h2>
+      <div class="section-desc">播单数据的获取来源及连接状态</div>
+      <div class="info-grid" id="dsInfoGrid">
+        <div class="info-item"><div class="info-label">当前数据源</div><div class="info-value" id="dsActive">-</div></div>
+        <div class="info-item"><div class="info-label">连接状态</div><div class="info-value" id="dsState">-</div></div>
+        <div class="info-item"><div class="info-label">云端连接失败次数</div><div class="info-value" id="dsFail">-</div></div>
+        <div class="info-item"><div class="info-label">可回切到云端</div><div class="info-value" id="dsSwitch">-</div></div>
       </div>
     </div>
   </div>
 
-  <!-- Goroutine 趋势 + 内存趋势 -->
+  <!-- 趋势图 -->
   <div class="grid grid-2" style="margin-bottom:20px">
     <div class="card">
-      <h2>Goroutine 趋势 (最近 60 次采样)</h2>
+      <h2>📈 并发任务数趋势（最近 2 分钟）</h2>
+      <div class="section-desc">趋势平稳 = 正常 | 持续上升 = 可能有任务泄漏</div>
       <div class="chart-container">
         <canvas id="goroutineChart"></canvas>
       </div>
     </div>
     <div class="card">
-      <h2>堆内存趋势 (最近 60 次采样)</h2>
+      <h2>📈 堆内存趋势（最近 2 分钟）</h2>
+      <div class="section-desc">趋势平稳 = 正常 | 持续上升不回落 = 可能有内存泄漏</div>
       <div class="chart-container">
         <canvas id="memoryChart"></canvas>
       </div>
@@ -318,14 +382,14 @@ graph TB
 
   <!-- Goroutine 栈详情 -->
   <div class="card full-width">
-    <h2>Goroutine 栈详情</h2>
-    <input type="text" id="goroutineFilter" placeholder="🔍 搜索 goroutine（输入关键字过滤）">
+    <h2>🔍 任务详情（Goroutine 栈 — 供开发人员排查用）</h2>
+    <div class="section-desc">列出所有正在运行的并发任务及其调用栈，可搜索关键字过滤</div>
+    <input type="text" id="goroutineFilter" placeholder="🔍 输入关键字搜索任务（例如：playthread, bass, http）">
     <pre class="goroutine-stack" id="goroutineStacks">加载中...</pre>
   </div>
 </div>
 
 <script>
-// Mermaid 初始化
 mermaid.initialize({
   startOnLoad: true,
   theme: 'dark',
@@ -336,11 +400,10 @@ mermaid.initialize({
     lineColor: '#64748b',
     secondaryColor: '#334155',
     tertiaryColor: '#0f172a',
-    fontSize: '13px'
+    fontSize: '12px'
   }
 });
 
-// 简易 Canvas 折线图
 class MiniChart {
   constructor(canvasId, color, label) {
     this.canvas = document.getElementById(canvasId);
@@ -356,59 +419,35 @@ class MiniChart {
     this.draw();
   }
   draw() {
-    const c = this.canvas;
-    const ctx = this.ctx;
+    const c = this.canvas, ctx = this.ctx;
     const dpr = window.devicePixelRatio || 1;
     const rect = c.getBoundingClientRect();
     c.width = rect.width * dpr;
     c.height = rect.height * dpr;
     ctx.scale(dpr, dpr);
     const w = rect.width, h = rect.height;
-
     ctx.clearRect(0, 0, w, h);
-
     if (this.data.length < 2) return;
     const max = Math.max(...this.data) * 1.2 || 1;
-    const min = 0;
     const stepX = w / (this.maxPoints - 1);
-
-    // 网格线
-    ctx.strokeStyle = '#1e293b';
-    ctx.lineWidth = 1;
-    for (let i = 0; i < 4; i++) {
-      const y = h * (i / 4);
-      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
-    }
-
-    // 数据线
-    ctx.strokeStyle = this.color;
-    ctx.lineWidth = 2;
-    ctx.beginPath();
+    ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 1;
+    for (let i = 0; i < 4; i++) { const y = h*(i/4); ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+    ctx.strokeStyle = this.color; ctx.lineWidth = 2; ctx.beginPath();
     for (let i = 0; i < this.data.length; i++) {
-      const x = i * stepX;
-      const y = h - ((this.data[i] - min) / (max - min)) * h;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      const x = i*stepX, y = h - (this.data[i]/max)*h;
+      if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
     }
     ctx.stroke();
-
-    // 填充
-    ctx.lineTo((this.data.length - 1) * stepX, h);
-    ctx.lineTo(0, h);
-    ctx.closePath();
-    ctx.fillStyle = this.color + '20';
-    ctx.fill();
-
-    // 当前值标签
-    const last = this.data[this.data.length - 1];
-    ctx.fillStyle = '#e2e8f0';
-    ctx.font = '12px sans-serif';
-    ctx.fillText(this.label + ': ' + last.toFixed(1), 8, 16);
-    ctx.fillText('max: ' + max.toFixed(1), 8, 30);
+    ctx.lineTo((this.data.length-1)*stepX, h); ctx.lineTo(0, h); ctx.closePath();
+    ctx.fillStyle = this.color + '20'; ctx.fill();
+    const last = this.data[this.data.length-1];
+    ctx.fillStyle = '#e2e8f0'; ctx.font = '12px sans-serif';
+    ctx.fillText('当前: ' + last.toFixed(1) + '  |  峰值: ' + max.toFixed(1), 8, 16);
   }
 }
 
-const goroutineChart = new MiniChart('goroutineChart', '#38bdf8', 'goroutines');
-const memoryChart = new MiniChart('memoryChart', '#22c55e', 'heap MB');
+const goroutineChart = new MiniChart('goroutineChart', '#38bdf8', '任务数');
+const memoryChart = new MiniChart('memoryChart', '#22c55e', '堆内存 MB');
 
 let goroutineStacksRaw = '';
 
@@ -418,7 +457,7 @@ function updateFilter() {
   if (!filter) { el.textContent = goroutineStacksRaw; return; }
   const blocks = goroutineStacksRaw.split('\n\n');
   const filtered = blocks.filter(b => b.toLowerCase().includes(filter));
-  el.textContent = filtered.length ? filtered.join('\n\n') : '没有匹配的 goroutine';
+  el.textContent = filtered.length ? filtered.join('\n\n') : '没有匹配的任务';
 }
 document.getElementById('goroutineFilter').addEventListener('input', updateFilter);
 
@@ -426,14 +465,38 @@ async function fetchJSON(url) {
   try { const r = await fetch(url); return await r.json(); } catch(e) { return null; }
 }
 
+// 数据源状态翻译
+function translateDS(active) {
+  const map = { Cloud: '云端', Center: '本地中心' };
+  return map[active] || active || '-';
+}
+function translateState(state) {
+  const map = { Normal: '正常连接', Fallback: '已降级到本地中心', PendingConfirm: '等待确认回切' };
+  return map[state] || state || '-';
+}
+function stateClass(state) {
+  if (state === 'Normal') return 'ds-normal';
+  if (state === 'Fallback') return 'ds-fallback';
+  return 'ds-offline';
+}
+
 async function refresh() {
-  // Goroutine + 内存详情
   const gr = await fetchJSON('/api/v1/infra/goroutines');
   if (gr && gr.data) {
     const d = gr.data;
     document.getElementById('metricGoroutines').textContent = d.num_goroutine;
     goroutineStacksRaw = d.stacks;
     updateFilter();
+
+    // 动态提示
+    const ghint = document.getElementById('goroutineHint');
+    if (d.num_goroutine > 100) {
+      ghint.textContent = '⚠️ 任务数偏高，请关注是否有泄漏';
+      ghint.style.color = '#eab308';
+    } else {
+      ghint.textContent = '✅ 正常范围（20~100）';
+      ghint.style.color = '#475569';
+    }
 
     if (d.memory) {
       const m = d.memory;
@@ -448,12 +511,11 @@ async function refresh() {
       goroutineChart.push(d.num_goroutine);
       memoryChart.push(m.heap_alloc_mb);
 
-      // 内存条
       const bars = [
-        { label: 'Heap Alloc', value: m.heap_alloc_mb, color: '#38bdf8' },
-        { label: 'Heap Idle', value: m.heap_idle_mb, color: '#334155' },
-        { label: 'Stack', value: m.stack_inuse_mb, color: '#22c55e' },
-        { label: 'Sys Total', value: m.sys_mb, color: '#a78bfa' },
+        { label: '堆内存 - 已用（程序正在使用的内存）', value: m.heap_alloc_mb, color: '#38bdf8' },
+        { label: '堆内存 - 空闲（已申请但暂未使用）', value: m.heap_idle_mb, color: '#334155' },
+        { label: '栈内存（各任务的独立空间）', value: m.stack_inuse_mb, color: '#22c55e' },
+        { label: '系统总占用（进程向操作系统申请的总量）', value: m.sys_mb, color: '#a78bfa' },
       ];
       const maxMem = Math.max(...bars.map(b => b.value)) || 1;
       document.getElementById('memoryBars').innerHTML = bars.map(b =>
@@ -464,31 +526,29 @@ async function refresh() {
     }
   }
 
-  // 系统信息
   const si = await fetchJSON('/api/v1/infra/system');
   if (si && si.data) {
     const d = si.data;
     document.getElementById('siGoVer').textContent = d.go_version;
     document.getElementById('siPlatform').textContent = d.goos + '/' + d.goarch;
-    document.getElementById('siCPU').textContent = d.num_cpu;
+    document.getElementById('siCPU').textContent = d.num_cpu + ' 核';
     document.getElementById('siCompiler').textContent = d.compiler;
     document.getElementById('siUptime').textContent = d.uptime;
     document.getElementById('siGoroutines').textContent = d.num_goroutine;
     document.getElementById('headerUptime').textContent = d.uptime;
   }
 
-  // 数据源状态
   const ds = await fetchJSON('/api/v1/infra/datasource');
   if (ds && ds.data) {
     const d = ds.data;
-    document.getElementById('dsActive').textContent = d.active || '-';
-    document.getElementById('dsState').textContent = d.state || '-';
-    document.getElementById('dsFail').textContent = d.cloud_fail_count ?? '-';
-    document.getElementById('dsSwitch').textContent = d.can_switch_back ? '是' : '否';
+    document.getElementById('dsActive').textContent = translateDS(d.active);
+    const stateEl = document.getElementById('dsState');
+    stateEl.innerHTML = '<span class="ds-status-label ' + stateClass(d.state) + '">' + translateState(d.state) + '</span>';
+    document.getElementById('dsFail').textContent = (d.cloud_fail_count ?? 0) + ' 次';
+    document.getElementById('dsSwitch').textContent = d.can_switch_back ? '✅ 可以' : '—';
   }
 }
 
-// 每 2 秒刷新
 setInterval(refresh, 2000);
 refresh();
 </script>
