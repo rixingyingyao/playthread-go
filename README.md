@@ -621,7 +621,7 @@ FadeMode（淡变模式）：
 
 ### WebSocket 实时推送
 
-连接地址：`ws://主机:3036/ws/playback`
+连接地址：`ws://主机:18800/ws/playback`
 
 连接后自动接收所有广播事件，消息格式：
 ```json
@@ -699,7 +699,7 @@ audio:
 ```yaml
 server:
   host: "0.0.0.0"                # 监听地址
-  port: 3036                      # HTTP 端口
+  port: 18800                     # HTTP 端口
   ws_path: "/ws/playback"        # WebSocket 路径
   udp_addr: "127.0.0.1:18820"   # UDP 监听地址（仅本机）
   api_token: "your-secret-token" # API 认证 Token（为空则不启用认证）
@@ -831,9 +831,9 @@ go test -race ./api/... ./core/... ./infra/... ./tests/...
 
 | 服务 | 地址 |
 |------|------|
-| HTTP API | `http://localhost:3036` |
-| 监控仪表盘 | `http://localhost:3036/dashboard` |
-| WebSocket | `ws://localhost:3036/ws/playback` |
+| HTTP API | `http://localhost:18800` |
+| 监控仪表盘 | `http://localhost:18800/dashboard` |
+| WebSocket | `ws://localhost:18800/ws/playback` |
 | UDP | `127.0.0.1:18820` |
 
 ---

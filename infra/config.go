@@ -129,7 +129,7 @@ func DefaultConfig() *Config {
 		},
 		Server: ServerConfig{
 			Host:    "0.0.0.0",
-			Port:    3036,
+			Port:    18800,
 			WSPath:  "/ws/playback",
 			UDPAddr: "127.0.0.1:18820",
 		},

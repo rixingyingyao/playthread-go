@@ -127,6 +127,6 @@ Write-Host "  go build ./...                                                    
 Write-Host "  go test -race -count=1 ./api/... ./core/... ./infra/... ./tests/... # Full test"
 Write-Host "  go test -race ./core/...                                          # Core tests"
 Write-Host "  go run ./cmd/playthread/ -config config.yaml                      # Start server"
-Write-Host "  Open http://localhost:3036/dashboard                              # Dashboard"
+Write-Host "  Open http://localhost:18800/dashboard                             # Dashboard"
 Write-Host ""
 Write-Host "Environment ready!" -ForegroundColor Green
