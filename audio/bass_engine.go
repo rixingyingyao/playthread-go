@@ -26,6 +26,7 @@ type BassEngine struct {
 
 	server    *IPCServer // 用于推送事件
 	channels  *VirtualChannelManager
+	ctx       context.Context
 	cancelCtx context.CancelFunc
 
 	mu       sync.Mutex
@@ -51,6 +52,8 @@ func (be *BassEngine) SetServer(server *IPCServer) {
 func (be *BassEngine) Run(ctx context.Context) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+
+	be.ctx = ctx
 
 	// 启动播完回调监听
 	go be.watchCallbacks(ctx)
@@ -218,10 +221,15 @@ func (be *BassEngine) Stop(channel int, fadeOut int) error {
 			// 启动 goroutine 等待淡出完成后停止通道
 			handle := ch.StreamHandle
 			go func() {
-				time.Sleep(time.Duration(fadeOut+50) * time.Millisecond)
-				be.execCtrl(func() interface{} {
-					return BassChannelStop(handle)
-				})
+				select {
+				case <-time.After(time.Duration(fadeOut+50) * time.Millisecond):
+					be.execCtrl(func() interface{} {
+						return BassChannelStop(handle)
+					})
+				case <-be.ctx.Done():
+					// 引擎已关闭，放弃延迟停止
+					return
+				}
 			}()
 			return nil
 		}
