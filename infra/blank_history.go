@@ -121,6 +121,8 @@ func (bh *BlankHistory) saveLocked() error {
 	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
 		return fmt.Errorf("写入垫乐历史失败: %w", err)
 	}
+	// Windows 上 os.Rename 在目标已存在时会失败，先删除目标
+	_ = os.Remove(path)
 	if err := os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("重命名垫乐历史文件失败: %w", err)
 	}

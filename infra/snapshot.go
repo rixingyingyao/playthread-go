@@ -55,6 +55,8 @@ func (sm *SnapshotManager) Save(info *PlayingInfo) error {
 		return fmt.Errorf("写入临时快照失败: %w", err)
 	}
 
+	// Windows 上 os.Rename 在目标已存在时会失败，先删除目标
+	_ = os.Remove(sm.filePath)
 	if err := os.Rename(tmpPath, sm.filePath); err != nil {
 		return fmt.Errorf("重命名快照文件失败: %w", err)
 	}

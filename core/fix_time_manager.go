@@ -412,8 +412,8 @@ func (fm *FixTimeManager) fireFixEvent(task *FixTimeTask) {
 
 	select {
 	case fm.eventBus.FixTimeArrive <- evt:
-	default:
-		log.Error().Str("id", task.ID).Msg("FixTimeArrive channel 满，事件丢失")
+	case <-time.After(500 * time.Millisecond):
+		log.Error().Str("id", task.ID).Msg("FixTimeArrive 投递超时(500ms)，事件丢失")
 	}
 }
 
@@ -433,8 +433,8 @@ func (fm *FixTimeManager) fireIntercutEvent(task *IntercutTask) {
 
 	select {
 	case fm.eventBus.IntercutArrive <- evt:
-	default:
-		log.Error().Str("id", task.ID).Msg("IntercutArrive channel 满，事件丢失")
+	case <-time.After(500 * time.Millisecond):
+		log.Error().Str("id", task.ID).Msg("IntercutArrive 投递超时(500ms)，事件丢失")
 	}
 }
 

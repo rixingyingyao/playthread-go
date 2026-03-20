@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
-	"sync/atomic"
 
 	"github.com/rs/zerolog/log"
 	_ "modernc.org/sqlite"
@@ -19,7 +18,8 @@ type DB struct {
 	conn    *sql.DB
 	writeCh chan writeJob
 	wg      sync.WaitGroup
-	closed  int32
+	mu      sync.Mutex // 保护 closed 和 writeCh 的 send，防止向已关闭 channel 发送
+	closed  bool
 }
 
 type writeJob struct {
@@ -65,20 +65,30 @@ func (d *DB) Conn() *sql.DB {
 
 // Write 提交写操作到串行化队列并等待完成
 func (d *DB) Write(fn func(*sql.DB) error) error {
-	if atomic.LoadInt32(&d.closed) == 1 {
+	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
 		return fmt.Errorf("数据库已关闭")
 	}
 	errCh := make(chan error, 1)
 	d.writeCh <- writeJob{fn: fn, errCh: errCh}
+	d.mu.Unlock()
 	return <-errCh
 }
 
 // WriteContext 带上下文的写操作
 func (d *DB) WriteContext(ctx context.Context, fn func(*sql.DB) error) error {
+	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		return fmt.Errorf("数据库已关闭")
+	}
 	errCh := make(chan error, 1)
 	select {
 	case d.writeCh <- writeJob{fn: fn, errCh: errCh}:
+		d.mu.Unlock()
 	case <-ctx.Done():
+		d.mu.Unlock()
 		return ctx.Err()
 	}
 	select {
@@ -98,8 +108,15 @@ func (d *DB) writeLoop() {
 
 // Close 关闭数据库连接
 func (d *DB) Close() error {
-	atomic.StoreInt32(&d.closed, 1)
+	d.mu.Lock()
+	if d.closed {
+		d.mu.Unlock()
+		return nil
+	}
+	d.closed = true
 	close(d.writeCh)
+	d.mu.Unlock()
+
 	d.wg.Wait()
 	if err := d.conn.Close(); err != nil {
 		return fmt.Errorf("关闭数据库失败: %w", err)

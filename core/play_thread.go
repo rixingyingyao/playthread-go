@@ -764,9 +764,19 @@ func (pt *PlayThread) executeSoftFix(evt FixTimeEvent) {
 		return
 	}
 
-	// 设置等待标志，当 playbackLoop 中 handlePlayFinished 检测到
+	// 设置等待标志和取消句柄。当 playbackLoop 中 handlePlayFinished 检测到
 	// softFixWaiting=true 时，会自动调用 playNextClip(true) 执行定时切换。
+	// cancelSoftFix 可被 CancelSoftFix() 或 executeHardFix() 调用以取消等待。
+	ctx, cancel := context.WithCancel(context.Background())
+	pt.cancelSoftFix = cancel
 	pt.softFixWaiting.Store(true)
+
+	go func() {
+		<-ctx.Done()
+		// 取消时清除等待标志（被外部取消而非播完触发时需要）
+		pt.softFixWaiting.Store(false)
+	}()
+
 	log.Info().Str("block_id", evt.BlockID).Msg("软定时等待当前素材播完")
 }
 
