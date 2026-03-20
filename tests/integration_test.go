@@ -240,10 +240,23 @@ func TestIntegration_Pprof_Endpoints(t *testing.T) {
 	}
 
 	for _, ep := range endpoints {
-		w := env.DoRequest("GET", ep, nil)
+		// pprof 限制为 localhost 访问，设置 RemoteAddr
+		req := httptest.NewRequest("GET", ep, nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		w := httptest.NewRecorder()
+		env.Handler.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
 			t.Errorf("GET %s expected 200, got %d", ep, w.Code)
 		}
+	}
+
+	// 非 localhost 应被拒绝
+	req := httptest.NewRequest("GET", "/debug/pprof/", nil)
+	req.RemoteAddr = "10.0.0.1:12345"
+	w := httptest.NewRecorder()
+	env.Handler.ServeHTTP(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("GET /debug/pprof/ from non-localhost expected 403, got %d", w.Code)
 	}
 }
 

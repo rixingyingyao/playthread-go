@@ -368,7 +368,14 @@ func (s *Server) handleGetMonitor(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTriggerUpdate 触发自升级
+// 安全措施：该端点强制要求配置 api_token，否则拒绝服务。
 func (s *Server) handleTriggerUpdate(w http.ResponseWriter, r *http.Request) {
+	// 强制认证：即使全局认证关闭，自升级端点也必须配置 token
+	if s.apiToken == "" {
+		writeErr(w, http.StatusForbidden, "自升级端点需要配置 api_token 后才能使用")
+		return
+	}
+
 	if s.updater == nil {
 		writeErr(w, http.StatusServiceUnavailable, "升级管理器未初始化")
 		return

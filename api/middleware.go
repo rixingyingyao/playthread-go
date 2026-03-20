@@ -212,3 +212,15 @@ func (rl *RateLimiter) Size() int {
 	defer rl.mu.Unlock()
 	return len(rl.clients)
 }
+
+// LocalhostOnly 限制仅允许 localhost 访问
+func LocalhostOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, _ := net.SplitHostPort(r.RemoteAddr)
+		if host != "127.0.0.1" && host != "::1" && host != "localhost" {
+			http.Error(w, `{"code":403,"message":"仅允许本地访问"}`, http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}

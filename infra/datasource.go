@@ -52,23 +52,25 @@ func (d DegradeState) String() string {
 
 // DataSourceConfig 数据源配置
 type DataSourceConfig struct {
-	CloudURL           string        `yaml:"cloud_url"`            // 云端 API 地址
-	CenterURL          string        `yaml:"center_url"`           // 本地中心 API 地址
-	HeartbeatInterval  time.Duration `yaml:"heartbeat_interval"`   // 心跳间隔，默认 5s
-	FailThreshold      int           `yaml:"fail_threshold"`       // 连续失败阈值触发降级，默认 3
-	RecoverThreshold   int           `yaml:"recover_threshold"`    // 连续成功阈值可回切，默认 5
-	HeartbeatTimeout   time.Duration `yaml:"heartbeat_timeout"`    // 心跳请求超时，默认 3s
-	ClockDriftMaxMs    int64         `yaml:"clock_drift_max_ms"`   // 时钟偏差阈值(ms)，默认 5000
+	CloudURL             string        `yaml:"cloud_url"`              // 云端 API 地址
+	CenterURL            string        `yaml:"center_url"`             // 本地中心 API 地址
+	HeartbeatInterval    time.Duration `yaml:"heartbeat_interval"`     // 心跳间隔，默认 5s
+	PlaylistPollInterval time.Duration `yaml:"playlist_poll_interval"` // 播单轮询间隔，默认 60s
+	FailThreshold        int           `yaml:"fail_threshold"`         // 连续失败阈值触发降级，默认 3
+	RecoverThreshold     int           `yaml:"recover_threshold"`      // 连续成功阈值可回切，默认 5
+	HeartbeatTimeout     time.Duration `yaml:"heartbeat_timeout"`      // 心跳请求超时，默认 3s
+	ClockDriftMaxMs      int64         `yaml:"clock_drift_max_ms"`     // 时钟偏差阈值(ms)，默认 5000
 }
 
 // DefaultDataSourceConfig 默认配置
 func DefaultDataSourceConfig() DataSourceConfig {
 	return DataSourceConfig{
-		HeartbeatInterval: 5 * time.Second,
-		FailThreshold:     3,
-		RecoverThreshold:  5,
-		HeartbeatTimeout:  3 * time.Second,
-		ClockDriftMaxMs:   5000,
+		HeartbeatInterval:    5 * time.Second,
+		PlaylistPollInterval: 60 * time.Second,
+		FailThreshold:        3,
+		RecoverThreshold:     5,
+		HeartbeatTimeout:     3 * time.Second,
+		ClockDriftMaxMs:      5000,
 	}
 }
 
@@ -103,6 +105,10 @@ type DataSourceManager struct {
 	lastCenterHB time.Time
 
 	client *http.Client
+
+	// 播单版本跟踪（避免重复推送相同播单）
+	lastPlaylistVersion int
+	lastPlaylistID      string
 
 	// 回调
 	onDegrade   func(from, to SourceType)      // 降级/回切时通知
@@ -141,25 +147,63 @@ func (dm *DataSourceManager) OnHeartbeat(fn func(src SourceType, ok bool)) {
 	dm.mu.Unlock()
 }
 
-// Run 启动心跳检测循环（阻塞，需在 goroutine 中调用）
+// Run 启动心跳检测 + 播单轮询循环（阻塞，需在 goroutine 中调用）
 func (dm *DataSourceManager) Run(ctx context.Context) {
-	ticker := time.NewTicker(dm.cfg.HeartbeatInterval)
-	defer ticker.Stop()
+	hbTicker := time.NewTicker(dm.cfg.HeartbeatInterval)
+	defer hbTicker.Stop()
+
+	plInterval := dm.cfg.PlaylistPollInterval
+	if plInterval <= 0 {
+		plInterval = 60 * time.Second
+	}
+	plTicker := time.NewTicker(plInterval)
+	defer plTicker.Stop()
 
 	log.Info().
 		Str("cloud", dm.cfg.CloudURL).
 		Str("center", dm.cfg.CenterURL).
-		Dur("interval", dm.cfg.HeartbeatInterval).
+		Dur("hb_interval", dm.cfg.HeartbeatInterval).
+		Dur("pl_interval", plInterval).
 		Msg("DataSourceManager 已启动")
+
+	// 启动时立即拉取一次播单
+	dm.playlistPoll(ctx)
 
 	for {
 		select {
-		case <-ticker.C:
+		case <-hbTicker.C:
 			dm.heartbeatCycle(ctx)
+		case <-plTicker.C:
+			dm.playlistPoll(ctx)
 		case <-ctx.Done():
 			log.Info().Msg("DataSourceManager 已停止")
 			return
 		}
+	}
+}
+
+// playlistPoll 从当前活跃数据源拉取今天的播单
+func (dm *DataSourceManager) playlistPoll(ctx context.Context) {
+	date := time.Now().Format("2006-01-02")
+	pl, err := dm.FetchPlaylist(ctx, date)
+	if err != nil {
+		log.Debug().Err(err).Str("date", date).Msg("播单拉取失败")
+		return
+	}
+
+	dm.mu.Lock()
+	// 检查是否与上次相同（避免重复推送）
+	if pl.ID == dm.lastPlaylistID {
+		dm.mu.Unlock()
+		return
+	}
+	dm.lastPlaylistID = pl.ID
+	fn := dm.onPlaylist
+	dm.mu.Unlock()
+
+	log.Info().Str("id", pl.ID).Str("date", date).Msg("收到新播单")
+	if fn != nil {
+		fn(pl)
 	}
 }
 
@@ -450,14 +494,15 @@ func (dm *DataSourceManager) handleConfirmHeartbeat(cloudOK bool) {
 
 // Status 返回数据源状态摘要（供 API 使用）
 type DataSourceStatus struct {
-	Active         string `json:"active"`
-	State          string `json:"state"`
-	CloudURL       string `json:"cloud_url"`
-	CenterURL      string `json:"center_url"`
-	CloudFailCount int    `json:"cloud_fail_count"`
-	CanSwitchBack  bool   `json:"can_switch_back"`
-	LastCloudHB    string `json:"last_cloud_heartbeat,omitempty"`
-	LastCenterHB   string `json:"last_center_heartbeat,omitempty"`
+	Active           string `json:"active"`
+	State            string `json:"state"`
+	CloudURL         string `json:"cloud_url"`
+	CenterURL        string `json:"center_url"`
+	CloudFailCount   int    `json:"cloud_fail_count"`
+	CanSwitchBack    bool   `json:"can_switch_back"`
+	LastPlaylistID   string `json:"last_playlist_id,omitempty"`
+	LastCloudHB      string `json:"last_cloud_heartbeat,omitempty"`
+	LastCenterHB     string `json:"last_center_heartbeat,omitempty"`
 }
 
 // StatusSnapshot 获取状态快照
@@ -472,6 +517,7 @@ func (dm *DataSourceManager) StatusSnapshot() DataSourceStatus {
 		CenterURL:      dm.cfg.CenterURL,
 		CloudFailCount: dm.cloudFailCount,
 		CanSwitchBack:  dm.state == DegradeConfirm,
+		LastPlaylistID: dm.lastPlaylistID,
 	}
 	if !dm.lastCloudHB.IsZero() {
 		s.LastCloudHB = dm.lastCloudHB.Format(time.RFC3339)

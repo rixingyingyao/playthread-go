@@ -15,12 +15,13 @@ import (
 
 // Server API 服务器，聚合 HTTP + WebSocket + UDP
 type Server struct {
-	cfg     *infra.ServerConfig
-	pt      *core.PlayThread
-	hub     *WSHub
-	router  chi.Router
-	httpSrv *http.Server
-	udp     *UDPListener
+	cfg      *infra.ServerConfig
+	apiToken string // 缓存 APIToken 供安全端点校验
+	pt       *core.PlayThread
+	hub      *WSHub
+	router   chi.Router
+	httpSrv  *http.Server
+	udp      *UDPListener
 
 	// 基础设施组件（Phase 7/8 接入）
 	dsMgr     *infra.DataSourceManager
@@ -33,9 +34,10 @@ type Server struct {
 // NewServer 创建 API 服务器
 func NewServer(cfg *infra.Config, pt *core.PlayThread) *Server {
 	s := &Server{
-		cfg: &cfg.Server,
-		pt:  pt,
-		hub: NewWSHub(),
+		cfg:      &cfg.Server,
+		apiToken: cfg.Server.APIToken,
+		pt:       pt,
+		hub:      NewWSHub(),
 	}
 
 	pt.EventBus().Subscribe(s.hub)
@@ -96,8 +98,9 @@ func (s *Server) buildRouter(cfg *infra.ServerConfig) chi.Router {
 	}
 	r.Get(wsPath, s.hub.ServeWS)
 
-	// pprof 调试端点
+	// pprof 调试端点（仅限 localhost 访问）
 	r.Route("/debug/pprof", func(r chi.Router) {
+		r.Use(LocalhostOnly)
 		r.Get("/", pprof.Index)
 		r.Get("/cmdline", pprof.Cmdline)
 		r.Get("/profile", pprof.Profile)
