@@ -23,11 +23,13 @@ import (
 // 对 position 请求返回指定位置；其余方法返回空 data。
 // 记录 pause/resume 调用以便测试验证。
 type mockIPC struct {
-	posMs    int
-	durMs    int
-	paused   atomic.Bool
-	pauseCnt atomic.Int32
-	resumeCnt atomic.Int32
+	posMs      int
+	durMs      int
+	paused     atomic.Bool
+	pauseCnt   atomic.Int32
+	resumeCnt  atomic.Int32
+	failPause  atomic.Bool // 设为 true 时 pause 返回错误
+	failResume atomic.Bool // 设为 true 时 resume 返回错误
 }
 
 func (m *mockIPC) serve(r io.Reader, w io.Writer) {
@@ -54,11 +56,19 @@ func (m *mockIPC) serve(r io.Reader, w io.Writer) {
 			})
 			resp.Data = data
 		case "pause":
-			m.paused.Store(true)
-			m.pauseCnt.Add(1)
+			if m.failPause.Load() {
+				resp.Error = "device error: pause failed"
+			} else {
+				m.paused.Store(true)
+				m.pauseCnt.Add(1)
+			}
 		case "resume":
-			m.paused.Store(false)
-			m.resumeCnt.Add(1)
+			if m.failResume.Load() {
+				resp.Error = "device error: resume failed"
+			} else {
+				m.paused.Store(false)
+				m.resumeCnt.Add(1)
+			}
 		}
 
 		out, _ := json.Marshal(resp)
@@ -638,4 +648,49 @@ func TestPlayThread_PauseResume_AudioBridge(t *testing.T) {
 	assert.False(t, pt.IsSuspended(), "Resume 后应为非挂起状态")
 	assert.False(t, mock.paused.Load(), "Resume 后 mock 应记录 paused=false")
 	assert.Equal(t, int32(1), mock.resumeCnt.Load(), "Resume 应被调用 1 次")
+}
+
+// TestPlayThread_PauseResume_FailureNoHalfCommit 验证底层失败时不会半提交状态
+func TestPlayThread_PauseResume_FailureNoHalfCommit(t *testing.T) {
+	ab, mock, abCleanup := newMockAudioBridge(5000, 30000)
+	defer abCleanup()
+
+	cfg := testConfig()
+	sm := NewStateMachine()
+	eb := NewEventBus()
+	pt := NewPlayThread(cfg, sm, eb, ab, nil)
+	pt.SetPlaylist(testPlaylist(3))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() { cancel(); pt.Wait() }()
+	pt.Run(ctx)
+	drainBroadcast(ctx, pt.eventBus)
+
+	require.NoError(t, pt.ChangeStatus(models.StatusAuto, "test"))
+	waitForStatus(t, pt.stateMachine, models.StatusAuto, time.Second)
+	time.Sleep(200 * time.Millisecond)
+
+	// 设置 Pause 失败
+	mock.failPause.Store(true)
+	err := pt.Suspend()
+	assert.Error(t, err, "底层 Pause 失败时 Suspend 应返回 error")
+	assert.False(t, pt.IsSuspended(), "Pause 失败后 suspended 不应被设为 true")
+
+	// 正常 Pause
+	mock.failPause.Store(false)
+	err = pt.Suspend()
+	assert.NoError(t, err)
+	assert.True(t, pt.IsSuspended())
+
+	// 设置 Resume 失败
+	mock.failResume.Store(true)
+	err = pt.Resume()
+	assert.Error(t, err, "底层 Resume 失败时 Resume 应返回 error")
+	assert.True(t, pt.IsSuspended(), "Resume 失败后 suspended 不应被改为 false")
+
+	// 正常 Resume
+	mock.failResume.Store(false)
+	err = pt.Resume()
+	assert.NoError(t, err)
+	assert.False(t, pt.IsSuspended())
 }
