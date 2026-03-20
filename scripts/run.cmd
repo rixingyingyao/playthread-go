@@ -4,7 +4,9 @@ REM Builds both executables, creates config and directories, then starts the ser
 
 setlocal enabledelayedexpansion
 
-set "ROOT=%~dp0.."
+REM --- Ensure working directory is correct (admin mode may change cwd) ---
+cd /d "%~dp0.."
+set "ROOT=%CD%"
 set "BIN_DIR=%ROOT%\bin"
 set "GO_EXE=C:\go_amd64\go\bin\go.exe"
 
@@ -13,12 +15,13 @@ if not exist "%GO_EXE%" (
     where go >nul 2>&1
     if errorlevel 1 (
         echo [ERROR] Go compiler not found. Install Go amd64 or set GO_EXE path.
-        exit /b 1
+        goto :fail
     )
     set "GO_EXE=go"
 )
 
 echo === Playthread-Go Build and Run ===
+echo    Root: %ROOT%
 echo.
 
 REM --- Create output directory ---
@@ -26,33 +29,27 @@ if not exist "%BIN_DIR%" mkdir "%BIN_DIR%"
 
 REM --- Build playthread.exe (pure Go, CGO_ENABLED=0) ---
 echo [1/4] Building playthread.exe ...
-pushd "%ROOT%"
 set CGO_ENABLED=0
 set GOOS=windows
 set GOARCH=amd64
 "%GO_EXE%" build -ldflags "-s -w" -o "%BIN_DIR%\playthread.exe" ./cmd/playthread/
 if errorlevel 1 (
     echo [ERROR] Failed to build playthread.exe
-    popd
-    exit /b 1
+    goto :fail
 )
 echo       OK
-popd
 
 REM --- Build audio-service.exe (CGO, needs gcc + BASS) ---
 echo [2/4] Building audio-service.exe ...
-pushd "%ROOT%"
 set CGO_ENABLED=1
 set GOOS=windows
 set GOARCH=amd64
 "%GO_EXE%" build -ldflags "-s -w" -o "%BIN_DIR%\audio-service.exe" ./cmd/audio-service/
 if errorlevel 1 (
     echo [ERROR] Failed to build audio-service.exe (needs MinGW-w64 gcc + BASS libs)
-    popd
-    exit /b 1
+    goto :fail
 )
 echo       OK
-popd
 
 REM --- Copy bass.dll ---
 echo [3/4] Preparing runtime files ...
@@ -99,3 +96,13 @@ echo.
 
 cd /d "%BIN_DIR%"
 "%BIN_DIR%\playthread.exe" -config config.yaml
+
+echo.
+echo Playthread has exited.
+pause
+goto :eof
+
+:fail
+echo.
+echo === Build or startup failed. See errors above. ===
+pause

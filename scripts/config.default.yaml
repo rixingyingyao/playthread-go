@@ -1,0 +1,75 @@
+# Playthread-Go Configuration
+# All values shown are defaults. Uncomment and modify as needed.
+
+playback:
+  polling_interval_ms: 20      # Timer polling interval (ms)
+  task_expire_ms: 3000         # Task expiration tolerance (ms)
+  hard_fix_advance_ms: 50      # Hard fix-time advance (ms)
+  soft_fix_advance_ms: 0       # Soft fix-time advance (ms)
+  cue_retry_max: 3             # Cue retry count
+  play_retry_max: 1            # Play retry count
+  snapshot_interval_s: 5       # Snapshot write interval (seconds)
+  cut_return_ms: 500           # Intercut return compensation (ms)
+  signal_switch_delay_ms: 500  # Signal switch hardware delay (ms)
+
+audio:
+  sample_rate: 44100           # 44100 or 48000
+  device_id: -1                # -1 = system default
+  fade_in_ms: 500
+  fade_out_ms: 500
+  fade_cross_ms: 300
+
+padding:
+  enable_ai: true
+  ai_threshold_ms: 60000
+  history_keep_days: 2
+  directory: padding
+
+server:
+  host: "0.0.0.0"
+  port: 18800
+  ws_path: /ws/playback
+  udp_addr: "127.0.0.1:18820"
+  api_token: ""                # Set a token to enable API authentication
+  # allowed_origins: []        # CORS origins, empty = allow all
+  rate_limit_rps: 0            # 0 = no rate limit
+
+monitor:
+  memory_check_interval_s: 3600
+  memory_warn_threshold_mb: 500
+  heartbeat_interval_s: 5
+
+log:
+  level: info                  # debug / info / warn / error
+  dir: logs
+  max_size_mb: 50
+  max_backups: 30
+  max_age_days: 30
+  compress: true
+
+db:
+  path: data/playthread.db
+
+datasource:
+  cloud_url: ""                # Cloud API URL
+  center_url: ""               # Local center API URL
+  heartbeat_interval: 5s
+  playlist_poll_interval: 60s
+  fail_threshold: 3
+  recover_threshold: 5
+  heartbeat_timeout: 3s
+  clock_drift_max_ms: 5000
+
+file_cache:
+  cache_dir: cache/media
+  max_size_mb: 2048
+  rate_limit_bytes: 5242880    # 5 MB/s
+  download_timeout: 10m
+  retry_count: 3
+  retry_delay: 2s
+
+offline:
+  dir: data/offline
+  max_entries: 10000
+  flush_interval: 10s
+  max_age_days: 7
