@@ -44,7 +44,12 @@ echo [2/4] Building audio-service.exe ...
 set CGO_ENABLED=1
 set GOOS=windows
 set GOARCH=amd64
-"%GO_EXE%" build -ldflags "-s -w" -o "%BIN_DIR%\audio-service.exe" ./cmd/audio-service/
+where gcc >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] gcc not found in PATH. Install MinGW-w64 or add C:\mingw64\bin to PATH.
+    goto :fail
+)
+"%GO_EXE%" build -ldflags "-s -w" -o "%BIN_DIR%\audio-service.exe" ./cmd/audio-service/ 2>&1
 if errorlevel 1 (
     echo [ERROR] Failed to build audio-service.exe (needs MinGW-w64 gcc + BASS libs)
     goto :fail
