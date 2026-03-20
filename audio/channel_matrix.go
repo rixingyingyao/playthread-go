@@ -3,7 +3,10 @@ package audio
 // ChannelMatrix 通道矩阵，用于 8 通道声卡的输出路由。
 // 矩阵格式：[outChan][inChan]float32，outChan=8，inChan=2（立体声）
 // 通过矩阵控制立体声信号路由到 8 通道声卡的哪一对物理输出。
-type ChannelMatrix struct{}
+//
+// 使用方式：当虚拟通道的 CustomChannelIndex > 0 时，
+// 调用 GetMatrix(index) 获取路由矩阵，通过 BASS Mix ChannelSetMatrix 应用。
+// 对应 C# BassMix.ChannelSetMatrix(handle, ChannelMatrix.Instance.GetChannelMatrix(idx))
 
 // 预定义矩阵：将立体声信号路由到 8 通道声卡的不同输出对
 // Channel1: 路由到输出通道 1-2（默认）
