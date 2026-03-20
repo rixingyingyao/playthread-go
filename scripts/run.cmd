@@ -20,6 +20,17 @@ if not exist "%GO_EXE%" (
     set "GO_EXE=go"
 )
 
+REM --- Ensure gcc (MinGW) is in PATH for CGO ---
+where gcc >nul 2>&1
+if errorlevel 1 (
+    if exist "C:\mingw64\bin\gcc.exe" (
+        set "PATH=C:\mingw64\bin;%PATH%"
+    ) else (
+        echo [ERROR] gcc not found. Install MinGW-w64 or add it to PATH.
+        goto :fail
+    )
+)
+
 echo === Playthread-Go Build and Run ===
 echo    Root: %ROOT%
 echo.
@@ -44,14 +55,9 @@ echo [2/4] Building audio-service.exe ...
 set CGO_ENABLED=1
 set GOOS=windows
 set GOARCH=amd64
-where gcc >nul 2>&1
-if errorlevel 1 (
-    echo [ERROR] gcc not found in PATH. Install MinGW-w64 or add C:\mingw64\bin to PATH.
-    goto :fail
-)
 "%GO_EXE%" build -ldflags "-s -w" -o "%BIN_DIR%\audio-service.exe" ./cmd/audio-service/ 2>&1
 if errorlevel 1 (
-    echo [ERROR] Failed to build audio-service.exe (needs MinGW-w64 gcc + BASS libs)
+    echo [ERROR] Failed to build audio-service.exe
     goto :fail
 )
 echo       OK
