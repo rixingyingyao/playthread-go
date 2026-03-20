@@ -14,7 +14,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rixingyingyao/playthread-go/api"
 	"github.com/rixingyingyao/playthread-go/bridge"
+	"github.com/rixingyingyao/playthread-go/core"
 	"github.com/rixingyingyao/playthread-go/db"
 	"github.com/rixingyingyao/playthread-go/infra"
 	"github.com/rixingyingyao/playthread-go/infra/platform"
@@ -92,6 +94,20 @@ func main() {
 
 	log.Info().Msg("播放服务子进程已启动")
 
+	// 核心编排器
+	sm := core.NewStateMachine()
+	eb := core.NewEventBus()
+	pt := core.NewPlayThread(cfg, sm, eb, pm.Bridge(), snapshotMgr)
+	pt.Run(ctx)
+
+	// API 服务（HTTP + WebSocket + UDP）
+	apiSrv := api.NewServer(cfg, pt)
+	go func() {
+		if err := apiSrv.Start(ctx); err != nil {
+			log.Error().Err(err).Msg("API 服务异常退出")
+		}
+	}()
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
@@ -99,5 +115,6 @@ func main() {
 	log.Info().Str("signal", sig.String()).Msg("收到退出信号，开始优雅关闭")
 
 	cancel()
+	pt.Wait()
 	log.Info().Msg("Playthread 主控进程退出")
 }

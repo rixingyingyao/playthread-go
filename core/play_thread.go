@@ -1229,3 +1229,68 @@ func (pt *PlayThread) EmrgCutStop() error {
 func (pt *PlayThread) IsCutPlaying() bool {
 	return pt.cutPlaying.Load()
 }
+
+// Status 获取当前播出状态（线程安全）
+func (pt *PlayThread) Status() models.Status {
+	return pt.stateMachine.Status()
+}
+
+// Playlist 获取当前播表（线程安全）
+func (pt *PlayThread) Playlist() *models.Playlist {
+	pt.mu.RLock()
+	defer pt.mu.RUnlock()
+	return pt.playlist
+}
+
+// IsSuspended 是否处于挂起状态
+func (pt *PlayThread) IsSuspended() bool {
+	return pt.suspended.Load()
+}
+
+// JumpTo 跳转到播表指定位置并播出
+func (pt *PlayThread) JumpTo(pos int) bool {
+	pt.mu.Lock()
+	if pt.playlist == nil || pos < 0 || pos >= pt.playlist.Len() {
+		pt.mu.Unlock()
+		return false
+	}
+	pt.currentPos = pos
+	pt.mu.Unlock()
+	return pt.playNextClip(true)
+}
+
+// GetProgress 获取当前播出进度（线程安全）
+func (pt *PlayThread) GetProgress() *models.PlayProgressEvent {
+	prog := pt.CurrentProgram()
+	if prog == nil {
+		return nil
+	}
+	posMs := 0
+	durMs := prog.EffectiveDuration()
+	if pt.audioBridge != nil {
+		if result, err := pt.audioBridge.GetPosition(int(models.ChanMainOut)); err == nil && result != nil {
+			posMs = result.PositionMs
+			if result.DurationMs > 0 {
+				durMs = result.DurationMs
+			}
+		}
+	}
+	progress := 0.0
+	if durMs > 0 {
+		progress = float64(posMs) / float64(durMs)
+		if progress > 1.0 {
+			progress = 1.0
+		}
+	}
+	return &models.PlayProgressEvent{
+		ProgramID:  prog.ID,
+		PositionMs: posMs,
+		DurationMs: durMs,
+		Progress:   progress,
+	}
+}
+
+// EventBus 返回事件总线（API 层订阅广播事件使用）
+func (pt *PlayThread) EventBus() *EventBus {
+	return pt.eventBus
+}
