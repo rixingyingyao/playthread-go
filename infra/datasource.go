@@ -1,6 +1,7 @@
 package infra
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -107,13 +108,18 @@ type DataSourceManager struct {
 	client *http.Client
 
 	// 播单版本跟踪（避免重复推送相同播单）
-	lastPlaylistVersion int
-	lastPlaylistID      string
+	lastPlaylistID       string
+	lastPlaylistVersion  int
+	lastPlaylistChecksum string
+
+	// 基础设施组件引用
+	fileCache    *FileCache
+	offlineStore *OfflineStore
 
 	// 回调
-	onDegrade   func(from, to SourceType)      // 降级/回切时通知
-	onPlaylist  func(pl *models.Playlist)       // 收到新播单时通知
-	onHeartbeat func(src SourceType, ok bool)   // 每次心跳结果
+	onDegrade   func(from, to SourceType)    // 降级/回切时通知
+	onPlaylist  func(pl *models.Playlist)    // 收到新播单时通知
+	onHeartbeat func(src SourceType, ok bool) // 每次心跳结果
 }
 
 // NewDataSourceManager 创建数据源管理器
@@ -144,6 +150,14 @@ func (dm *DataSourceManager) OnPlaylist(fn func(pl *models.Playlist)) {
 func (dm *DataSourceManager) OnHeartbeat(fn func(src SourceType, ok bool)) {
 	dm.mu.Lock()
 	dm.onHeartbeat = fn
+	dm.mu.Unlock()
+}
+
+// SetInfra 注入基础设施组件（FileCache + OfflineStore）
+func (dm *DataSourceManager) SetInfra(fc *FileCache, os_ *OfflineStore) {
+	dm.mu.Lock()
+	dm.fileCache = fc
+	dm.offlineStore = os_
 	dm.mu.Unlock()
 }
 
@@ -185,25 +199,125 @@ func (dm *DataSourceManager) Run(ctx context.Context) {
 // playlistPoll 从当前活跃数据源拉取今天的播单
 func (dm *DataSourceManager) playlistPoll(ctx context.Context) {
 	date := time.Now().Format("2006-01-02")
-	pl, err := dm.FetchPlaylist(ctx, date)
+	plResp, err := dm.fetchPlaylistWithMeta(ctx, date)
 	if err != nil {
 		log.Debug().Err(err).Str("date", date).Msg("播单拉取失败")
 		return
 	}
 
+	pl := plResp.Playlist
+
 	dm.mu.Lock()
-	// 检查是否与上次相同（避免重复推送）
-	if pl.ID == dm.lastPlaylistID {
+	// 检查是否与上次相同（ID + Version + Checksum 三重判断）
+	same := pl.ID == dm.lastPlaylistID &&
+		plResp.Version == dm.lastPlaylistVersion &&
+		plResp.Checksum == dm.lastPlaylistChecksum
+	if same {
 		dm.mu.Unlock()
 		return
 	}
 	dm.lastPlaylistID = pl.ID
+	dm.lastPlaylistVersion = plResp.Version
+	dm.lastPlaylistChecksum = plResp.Checksum
 	fn := dm.onPlaylist
+	fc := dm.fileCache
 	dm.mu.Unlock()
 
-	log.Info().Str("id", pl.ID).Str("date", date).Msg("收到新播单")
+	log.Info().
+		Str("id", pl.ID).
+		Int("version", plResp.Version).
+		Str("date", date).
+		Msg("收到新播单")
+
+	// 触发素材预缓存
+	if fc != nil {
+		go dm.preCachePlaylist(ctx, pl, fc)
+	}
+
 	if fn != nil {
 		fn(pl)
+	}
+}
+
+// fetchPlaylistWithMeta 获取播单及元数据（版本、校验值）
+func (dm *DataSourceManager) fetchPlaylistWithMeta(ctx context.Context, date string) (*PlaylistResponse, error) {
+	baseURL := dm.ActiveURL()
+	if baseURL == "" {
+		return nil, fmt.Errorf("活跃数据源 URL 未配置")
+	}
+
+	url := baseURL + "/api/v1/playlist?date=" + date
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("创建请求失败: %w", err)
+	}
+
+	resp, err := dm.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("请求播单失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("播单接口返回 %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
+	if err != nil {
+		return nil, fmt.Errorf("读取播单响应体失败: %w", err)
+	}
+
+	var plResp PlaylistResponse
+	if err := json.Unmarshal(body, &plResp); err != nil {
+		return nil, fmt.Errorf("解析播单响应失败: %w", err)
+	}
+
+	if plResp.Playlist == nil {
+		return nil, fmt.Errorf("播单为空")
+	}
+
+	return &plResp, nil
+}
+
+// preCachePlaylist 预缓存播单中所有素材文件
+func (dm *DataSourceManager) preCachePlaylist(ctx context.Context, pl *models.Playlist, fc *FileCache) {
+	var total, cached, failed int
+	for _, block := range pl.Blocks {
+		for _, prog := range block.Programs {
+			if prog.FilePath == "" || prog.IsSignalSource() {
+				continue
+			}
+			total++
+			if fc.Exists(prog.FilePath) {
+				fc.Touch(prog.FilePath)
+				cached++
+				continue
+			}
+			// 需要下载：使用 PlayUrl 或构造下载 URL
+			downloadURL := prog.PlayUrl
+			if downloadURL == "" {
+				downloadURL = dm.ActiveURL() + "/api/v1/media/" + prog.FilePath
+			}
+			if err := fc.Download(ctx, downloadURL, prog.FilePath, ""); err != nil {
+				log.Warn().Err(err).Str("file", prog.FilePath).Msg("素材预缓存失败")
+				failed++
+			}
+		}
+	}
+	if total > 0 {
+		log.Info().
+			Int("total", total).
+			Int("cached", cached).
+			Int("downloaded", total-cached-failed).
+			Int("failed", failed).
+			Msg("播单素材预缓存完成")
+	}
+
+	// 下载结束后尝试 LRU 清理
+	if removed, err := fc.CleanupLRU(); err != nil {
+		log.Warn().Err(err).Msg("LRU 清理失败")
+	} else if removed > 0 {
+		log.Info().Int("removed", removed).Msg("LRU 清理完成")
 	}
 }
 
@@ -418,6 +532,13 @@ func (dm *DataSourceManager) handleCloudHeartbeat(ok bool) {
 	if ok {
 		dm.cloudFailCount = 0
 		dm.lastCloudHB = time.Now()
+
+		// 在线状态下尝试补传离线条目
+		if dm.offlineStore != nil && dm.offlineStore.Len() > 0 {
+			store := dm.offlineStore
+			baseURL := dm.cfg.CloudURL
+			go dm.replayOffline(store, baseURL)
+		}
 		return
 	}
 
@@ -426,6 +547,15 @@ func (dm *DataSourceManager) handleCloudHeartbeat(ok bool) {
 		Int("fail_count", dm.cloudFailCount).
 		Int("threshold", dm.cfg.FailThreshold).
 		Msg("云端心跳失败")
+
+	// 离线暂存心跳失败事件
+	if dm.offlineStore != nil {
+		_ = dm.offlineStore.Add(OfflineHeartbeat, map[string]interface{}{
+			"source":     SourceCloud.String(),
+			"fail_count": dm.cloudFailCount,
+			"time":       time.Now().Format(time.RFC3339),
+		})
+	}
 
 	if dm.cloudFailCount >= dm.cfg.FailThreshold {
 		// 触发降级
@@ -436,6 +566,16 @@ func (dm *DataSourceManager) handleCloudHeartbeat(ok bool) {
 		log.Error().
 			Int("fail_count", dm.cloudFailCount).
 			Msg("云端连续失败，降级到本地中心")
+
+		// 暂存降级事件
+		if dm.offlineStore != nil {
+			_ = dm.offlineStore.Add(OfflineEvent, map[string]interface{}{
+				"event": "degrade",
+				"from":  SourceCloud.String(),
+				"to":    SourceCenter.String(),
+				"time":  time.Now().Format(time.RFC3339),
+			})
+		}
 
 		if dm.onDegrade != nil {
 			go dm.onDegrade(SourceCloud, SourceCenter)
@@ -526,4 +666,30 @@ func (dm *DataSourceManager) StatusSnapshot() DataSourceStatus {
 		s.LastCenterHB = dm.lastCenterHB.Format(time.RFC3339)
 	}
 	return s
+}
+
+// replayOffline 将离线暂存条目补传到云端
+func (dm *DataSourceManager) replayOffline(store *OfflineStore, baseURL string) {
+	if baseURL == "" {
+		return
+	}
+
+	uploadURL := baseURL + "/api/v1/offline/upload"
+	count, err := store.ReplayTo(context.Background(), func(entry OfflineEntry) error {
+		data, _ := json.Marshal(entry)
+		resp, err := dm.client.Post(uploadURL, "application/json", io.NopCloser(bytes.NewReader(data)))
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("补传返回 %d", resp.StatusCode)
+		}
+		return nil
+	})
+	if err != nil {
+		log.Warn().Err(err).Int("uploaded", count).Msg("离线条目补传中断")
+	} else if count > 0 {
+		log.Info().Int("uploaded", count).Msg("离线条目补传完成")
+	}
 }

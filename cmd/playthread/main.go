@@ -151,12 +151,11 @@ func runApp(ctx context.Context, configPath string) {
 	// 数据源管理器（云端/中心双数据源 + 心跳降级）
 	dsMgr := infra.NewDataSourceManager(cfg.DataSource)
 	dsMgr.OnDegrade(func(from, to infra.SourceType) {
-		log.Warn().Str("from", string(from)).Str("to", string(to)).Msg("数据源降级切换")
+		log.Warn().Str("from", from.String()).Str("to", to.String()).Msg("数据源降级切换")
 	})
 	dsMgr.OnHeartbeat(func(src infra.SourceType, ok bool) {
-		log.Debug().Str("source", string(src)).Bool("ok", ok).Msg("数据源心跳")
+		log.Debug().Str("source", src.String()).Bool("ok", ok).Msg("数据源心跳")
 	})
-	go dsMgr.Run(ctx)
 
 	// 素材文件缓存
 	fileCache := infra.NewFileCache(cfg.FileCache)
@@ -164,6 +163,10 @@ func runApp(ctx context.Context, configPath string) {
 	// 断网暂存
 	offlineStore := infra.NewOfflineStore(cfg.Offline)
 	go offlineStore.RunFlush(ctx)
+
+	// 注入基础设施组件后再启动数据源管理器
+	dsMgr.SetInfra(fileCache, offlineStore)
+	go dsMgr.Run(ctx)
 
 	// 自升级管理器
 	updater := infra.NewUpdater(Version)
